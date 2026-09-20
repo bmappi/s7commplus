@@ -38,9 +38,10 @@ record whether TLS, a client certificate, and CA verification were enabled.
 Running and reporting
 ---------------------
 
-Install the test extras, then run the safe TLS profile. Reportable metadata must
-not contain addresses, credentials, certificate paths, plant names, or site
-identifiers:
+Run this acceptance suite from a development checkout; it is not included in
+the stable PyPI installation. Install the test extras, then run the safe TLS
+profile. Reportable metadata must not contain addresses, credentials,
+certificate paths, plant names, or site identifiers:
 
 .. code-block:: console
 
