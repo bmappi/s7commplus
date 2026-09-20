@@ -129,6 +129,7 @@ class S7CommPlusClient:
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
         password: Optional[str] = None,
+        legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -142,6 +143,8 @@ class S7CommPlusClient:
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
             password: PLC password for legitimation (V2+ with TLS)
+            legacy_session_key_refresh_interval: Seconds between legacy
+                SessionKey renewals, or ``None`` to disable them.
         """
         self._symbol_catalog = None
         self._connect_params = {
@@ -152,6 +155,7 @@ class S7CommPlusClient:
             "tls_key": tls_key,
             "tls_ca": tls_ca,
             "password": password,
+            "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
         }
         self._open_connection()
 
@@ -167,6 +171,7 @@ class S7CommPlusClient:
             tls_key=p["tls_key"],
             tls_ca=p["tls_ca"],
             password=p["password"] or "",
+            legacy_session_key_refresh_interval=p["legacy_session_key_refresh_interval"],
         )
         if p["password"] is not None and self._connection.tls_active and not self._connection.requires_substreamed:
             logger.info("Performing PLC legitimation (password authentication)")
