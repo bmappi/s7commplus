@@ -52,6 +52,57 @@ class TestBuildReadPayload:
         assert len(payload) > len(single)
 
 
+def _decode_first_item_lids(payload: bytes) -> tuple[int, int, list[int]]:
+    """Decode the first ItemAddress from a read or write payload."""
+    offset = 4
+    _item_count, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    _field_count, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    _symbol_crc, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    access_area, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    num_lids, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    access_sub_area, consumed = decode_uint32_vlq(payload, offset)
+    offset += consumed
+    lids: list[int] = []
+    for _ in range(num_lids - 1):
+        lid, consumed = decode_uint32_vlq(payload, offset)
+        offset += consumed
+        lids.append(lid)
+    return access_area, access_sub_area, lids
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _build_read_payload([(7, 12, 4)]),
+        _build_write_payload([(7, 12, b"data", DataType.BLOB)]),
+    ],
+)
+def test_db_byte_offset_uses_classic_blob_marker_and_zero_based_offset(payload: bytes) -> None:
+    area, sub_area, lids = _decode_first_item_lids(payload)
+    assert area == Ids.DB_ACCESS_AREA_BASE + 7
+    assert sub_area == Ids.DB_VALUE_ACTUAL
+    assert lids == [Ids.LID_OMS_STB_CLASSIC_BLOB, 12, 4]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _build_area_read_payload(Ids.NATIVE_THE_M_AREA_RID, 12, 4),
+        _build_area_write_payload(Ids.NATIVE_THE_M_AREA_RID, 12, b"data"),
+    ],
+)
+def test_area_byte_offset_uses_classic_blob_marker_and_zero_based_offset(payload: bytes) -> None:
+    area, sub_area, lids = _decode_first_item_lids(payload)
+    assert area == Ids.NATIVE_THE_M_AREA_RID
+    assert sub_area == Ids.CONTROLLER_AREA_VALUE_ACTUAL
+    assert lids == [Ids.LID_OMS_STB_CLASSIC_BLOB, 12, 4]
+
+
 class TestParseCpuState:
     # Exact attribute sequence isolated by the hardware RUN/STOP capture in #878.
     RUN_ATTRIBUTES = bytes.fromhex("a3bf0000030001a3bf0100030007a3be5400030000")
@@ -224,7 +275,7 @@ class TestPayloadAgreement:
         # Total field count (VLQ)
         total_fields, consumed = decode_uint32_vlq(payload, offset)
         offset += consumed
-        assert total_fields == 6  # 4 base + 2 LIDs
+        assert total_fields == 7  # 4 base + ClassicBlob marker, offset, and size
 
     def test_write_read_consistency(self) -> None:
         """Build write and read payloads for same address, verify both compile."""
@@ -268,9 +319,10 @@ class TestIntegrityPlaceholder:
         payload = _build_symbolic_write_payload(0x8A0E0001, [1, 4], b"\x01")
         assert self._has_only_trailing_fill(payload)
 
-    def test_write_payload_encodes_explicit_datatype(self) -> None:
-        payload = _build_write_payload([(1, 0, struct.pack(">f", 2.0), DataType.REAL)])
-        assert bytes((0x00, DataType.REAL)) + struct.pack(">f", 2.0) in payload
+    def test_write_payload_validates_type_but_encodes_classic_blob(self) -> None:
+        data = struct.pack(">f", 2.0)
+        payload = _build_write_payload([(1, 0, data, DataType.REAL)])
+        assert encode_pvalue_blob(data) in payload
 
     @pytest.mark.parametrize(("with_integrity", "integrity_id"), [(False, 0), (True, 7)])
     def test_connection_conditionally_inserts_integrity_id(self, with_integrity: bool, integrity_id: int) -> None:
@@ -418,8 +470,9 @@ class TestSkipTypedValue:
 
     def test_blob(self) -> None:
         blob_data = bytes([1, 2, 3, 4])
+        blob_root_id = encode_uint32_vlq(0)
         vlq_len = encode_uint32_vlq(len(blob_data))
-        data = vlq_len + blob_data
+        data = blob_root_id + vlq_len + blob_data
         new_offset = skip_typed_value(data, 0, DataType.BLOB, 0x00)
         assert new_offset == len(data)
 
@@ -643,7 +696,7 @@ class TestClientErrorPaths:
                         connection.session_id,
                         Ids.DB_ACCESS_AREA_BASE + db_number,
                         Ids.DB_VALUE_ACTUAL,
-                        [start + 1, len(data)],
+                        [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
                         data,
                     ),
                 )

@@ -32,6 +32,7 @@ choose the guide that matches the PLC operation you need.
    data-access
    subscriptions-alarms
    server-emulator
+   real-plc-testing
 
 .. toctree::
    :maxdepth: 2

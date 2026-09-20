@@ -249,6 +249,10 @@ class Ids(IntEnum):
     # DB AccessArea base (add DB number to get area ID)
     DB_ACCESS_AREA_BASE = 0x8A0E0000
 
+    # Marker for raw/absolute access to non-optimized data. The address path is
+    # this marker followed by a zero-based byte offset and byte size.
+    LID_OMS_STB_CLASSIC_BLOB = 3
+
 
 # Function codes that use the READ IntegrityId counter (V2+)
 READ_FUNCTION_CODES: frozenset[int] = frozenset(

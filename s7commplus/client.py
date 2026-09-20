@@ -26,6 +26,7 @@ from .codec import (
     decode_pvalue_to_bytes,
     encode_item_address,
     encode_object_qualifier,
+    encode_pvalue_blob,
     encode_pvalue_typed,
     parse_create_object_session_id,
 )
@@ -300,7 +301,10 @@ class S7CommPlusClient:
         assert self._connection is not None
         access_area = Ids.DB_ACCESS_AREA_BASE + (db_number & 0xFFFF)
         payload = _build_substreamed_read_payload(
-            self._connection.session_id, access_area, Ids.DB_VALUE_ACTUAL, [start + 1, size]
+            self._connection.session_id,
+            access_area,
+            Ids.DB_VALUE_ACTUAL,
+            [Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
         )
         response = self._connection.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload)
         return _parse_substreamed_read_response(response)
@@ -347,7 +351,12 @@ class S7CommPlusClient:
         assert self._connection is not None
         access_area = Ids.DB_ACCESS_AREA_BASE + (db_number & 0xFFFF)
         payload = _build_substreamed_write_payload(
-            self._connection.session_id, access_area, Ids.DB_VALUE_ACTUAL, [start + 1, len(data)], data, datatype
+            self._connection.session_id,
+            access_area,
+            Ids.DB_VALUE_ACTUAL,
+            [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
+            data,
+            datatype,
         )
         self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
 
@@ -388,7 +397,10 @@ class S7CommPlusClient:
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_read_payload(
-                self._connection.session_id, area_rid, Ids.CONTROLLER_AREA_VALUE_ACTUAL, [start + 1, size]
+                self._connection.session_id,
+                area_rid,
+                Ids.CONTROLLER_AREA_VALUE_ACTUAL,
+                [Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
             )
             response = self._connection.send_request(FunctionCode.GET_VAR_SUBSTREAMED, payload)
             return _parse_substreamed_read_response(response)
@@ -415,7 +427,12 @@ class S7CommPlusClient:
 
         if self._connection.requires_substreamed:
             payload = _build_substreamed_write_payload(
-                self._connection.session_id, area_rid, Ids.CONTROLLER_AREA_VALUE_ACTUAL, [start + 1, len(data)], data, datatype
+                self._connection.session_id,
+                area_rid,
+                Ids.CONTROLLER_AREA_VALUE_ACTUAL,
+                [Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
+                data,
+                datatype,
             )
             self._connection.send_request(FunctionCode.SET_VAR_SUBSTREAMED, payload)
             return
@@ -1057,7 +1074,7 @@ def _build_read_payload(items: list[tuple[int, int, int]], protocol_version: int
         addr_bytes, field_count = encode_item_address(
             access_area=access_area,
             access_sub_area=Ids.DB_VALUE_ACTUAL,
-            lids=[start + 1, size],
+            lids=[Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
         )
         addresses.append(addr_bytes)
         total_field_count += field_count
@@ -1153,7 +1170,7 @@ def _build_write_payload(items: list[DBWriteItem], protocol_version: int = Proto
         addr_bytes, field_count = encode_item_address(
             access_area=access_area,
             access_sub_area=Ids.DB_VALUE_ACTUAL,
-            lids=[start + 1, len(data)],
+            lids=[Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
         )
         addresses.append(addr_bytes)
         total_field_count += field_count
@@ -1165,8 +1182,11 @@ def _build_write_payload(items: list[DBWriteItem], protocol_version: int = Proto
     for addr in addresses:
         payload += addr
     for i, (_, _, data, datatype) in enumerate(normalized, 1):
+        encode_pvalue_typed(datatype, data)  # validate the caller's declared scalar size
         payload += encode_uint32_vlq(i)
-        payload += encode_pvalue_typed(datatype, data)
+        # Raw byte-offset (classic-blob) writes are wire-untyped. Real PLCs
+        # reject scalar PValue tags here even when the declared type is correct.
+        payload += encode_pvalue_blob(data)
     payload += bytes([0x00])
     payload += encode_object_qualifier(protocol_version=protocol_version)
     payload += struct.pack(">I", 0)
@@ -1253,7 +1273,8 @@ def _build_substreamed_write_payload(
     payload += oq
     payload += bytes([0x00])
     payload += encode_uint32_vlq(1)
-    payload += encode_pvalue_typed(datatype, data)
+    encode_pvalue_typed(datatype, data)  # validate size; classic-blob access is wire-untyped
+    payload += encode_pvalue_blob(data)
     payload += encode_uint32_vlq(1)
     payload += struct.pack(">I", 0)
     return bytes(payload)
@@ -1285,7 +1306,7 @@ def _build_area_read_payload(area_rid: int, start: int, size: int, protocol_vers
     addr_bytes, field_count = encode_item_address(
         access_area=area_rid,
         access_sub_area=Ids.CONTROLLER_AREA_VALUE_ACTUAL,
-        lids=[start + 1, size],
+        lids=[Ids.LID_OMS_STB_CLASSIC_BLOB, start, size],
     )
 
     payload = bytearray()
@@ -1305,7 +1326,7 @@ def _build_area_write_payload(
     addr_bytes, field_count = encode_item_address(
         access_area=area_rid,
         access_sub_area=Ids.CONTROLLER_AREA_VALUE_ACTUAL,
-        lids=[start + 1, len(data)],
+        lids=[Ids.LID_OMS_STB_CLASSIC_BLOB, start, len(data)],
     )
 
     payload = bytearray()
@@ -1314,7 +1335,8 @@ def _build_area_write_payload(
     payload += encode_uint32_vlq(field_count)
     payload += addr_bytes
     payload += encode_uint32_vlq(1)  # item number 1
-    payload += encode_pvalue_typed(datatype, data)
+    encode_pvalue_typed(datatype, data)  # validate size; classic-blob access is wire-untyped
+    payload += encode_pvalue_blob(data)
     payload += bytes([0x00])
     payload += encode_object_qualifier(protocol_version=protocol_version)
     payload += struct.pack(">I", 0)

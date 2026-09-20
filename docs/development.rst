@@ -27,7 +27,8 @@ Run the complete checks
    pre-commit run --all-files
 
 Real-PLC tests are opt-in and require an explicitly selected, disposable test
-DB. See ``CLAUDE.md`` in the repository for the full command and safety rules.
+DB. Follow :doc:`real-plc-testing` for TLS configuration, the safe runner, and
+sanitized evidence collection.
 
 Build the documentation
 -----------------------
