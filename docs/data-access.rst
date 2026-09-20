@@ -88,6 +88,53 @@ path. Convert it for ``read_symbolic`` as follows:
        lids=[int(value, 16) for value in lid_hex],
    )
 
+For application code, the name-based catalog API keeps that address and type
+metadata together and uses the PLC datatype when encoding writes:
+
+.. code-block:: python
+
+   import struct
+
+   tag = client.resolve_tag("Data_block_1.temperature")
+   print(tag.softdatatype, tag.array_dimensions, tag.symbol_crc)
+
+   raw = client.read_tag(tag.name)
+   temperature = struct.unpack(">f", raw)[0]
+   client.write_tag(tag.name, struct.pack(">f", 21.5))
+
+``read_tags`` and ``write_tags`` batch multiple names and return one
+:class:`~s7commplus.TagResult` per requested item. Inspect ``result.success``,
+``result.value``, and ``result.error`` instead of losing successful items when
+the PLC rejects another item in the same request:
+
+.. code-block:: python
+
+   results = client.read_tags(
+       ["Data_block_1.temperature", "Data_block_1.pressure"]
+   )
+   for result in results:
+       if result.success:
+           print(result.tag.name, result.value)
+       else:
+           print(result.tag.name, result.error)
+
+The catalog is cached for the connection. Call ``refresh_tag_catalog`` to
+browse immediately or ``invalidate_tag_catalog`` to force a browse on the next
+name lookup. A failed read with a non-zero SymbolCRC is retried once only when a
+fresh browse reports that the tag's CRC changed. Writes are never retried after
+an ambiguous transport failure. Unknown names and unsupported PLC datatypes
+raise before a request is sent.
+
+The async client provides the same methods as coroutines, except
+``invalidate_tag_catalog``, which is immediate:
+
+.. code-block:: python
+
+   raw = await client.read_tag("Data_block_1.temperature")
+   results = await client.write_tags(
+       {"Data_block_1.temperature": struct.pack(">f", 21.5)}
+   )
+
 Symbolic browsing and access remain experimental because observable behavior
 varies across firmware versions. In particular, physical I/Q/M reads and
 symbolic BOOL values can behave differently on some S7-1200 firmware.

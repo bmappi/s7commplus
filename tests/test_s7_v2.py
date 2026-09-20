@@ -1102,6 +1102,25 @@ class TestCreateSessionRequest:
         assert frame[: len(expected)] == expected
         assert frame[-4:] == struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
 
+    @pytest.mark.asyncio
+    async def test_async_detects_session_key_attributes(self) -> None:
+        server = S7CommPlusServer(
+            public_key_fingerprint="01:BD426B091F08731A",
+            session_challenge=bytes(range(20)),
+        )
+        application_response = server._handle_create_object(seq_num=0, request_data=b"")
+        response = encode_header(ProtocolVersion.V1, len(application_response)) + application_response
+        response += struct.pack(">BBH", 0x72, ProtocolVersion.V1, 0x0000)
+
+        client = S7CommPlusAsyncClient()
+        client._send_cotp_dt = AsyncMock()
+        client._recv_cotp_dt = AsyncMock(return_value=response)
+
+        await client._create_session()
+
+        assert client._legacy_session_key_required
+        assert client._server_session_version is not None
+
 
 class TestInitSSLResponse:
     @pytest.mark.asyncio
@@ -1282,6 +1301,95 @@ class TestSessionKeySelection:
         assert conn._try_session_key_auth() is None
         assert conn._session_key is None
 
+
+class TestLegacySessionKeyRefresh:
+    @staticmethod
+    def _authenticated_connection() -> S7CommPlusConnection:
+        from s7commplus.session_auth.keys import KeyFamily
+
+        conn = S7CommPlusConnection("127.0.0.1")
+        conn._connected = True
+        conn._session_ready = True
+        conn._session_id = 0x70000FDC
+        conn._session_key = b"o" * 24
+        conn._session_auth_public_key = b"p" * 40
+        conn._session_auth_family = KeyFamily.S7_1500
+        return conn
+
+    def test_renewal_installs_key_only_after_accepted_old_key_response(self) -> None:
+        conn = self._authenticated_connection()
+        challenge = bytes(range(20))
+        challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(challenge)]) + challenge
+        old_key = conn._session_key
+        new_key = b"n" * 24
+        keys_during_exchange: list[bytes | None] = []
+
+        def exchange(*_args: object) -> bytes:
+            keys_during_exchange.append(conn._session_key)
+            return challenge_response if len(keys_during_exchange) == 1 else b"\x00"
+
+        conn._send_request = MagicMock(side_effect=exchange)
+        with patch("s7commplus.session_auth.legacy_auth.authenticate_real_plc", return_value=(b"b" * 180, new_key)):
+            conn._renew_session_key_locked()
+
+        assert keys_during_exchange == [old_key, old_key]
+        assert conn._session_key == new_key
+        renewal_call = conn._send_request.call_args_list[1]
+        assert renewal_call.args[0] == FunctionCode.SET_VARIABLE
+        assert encode_uint32_vlq(LegitimationId.SESSION_SETUP_LEGITIMATION) in renewal_call.args[1]
+
+    def test_rejected_renewal_never_installs_generated_key(self) -> None:
+        conn = self._authenticated_connection()
+        challenge = bytes(range(20))
+        challenge_response = bytes([0x00, 0x00, 0x10, DataType.USINT, len(challenge)]) + challenge
+        old_key = conn._session_key
+        conn._send_request = MagicMock(side_effect=[challenge_response, encode_uint32_vlq(0x8104)])
+
+        with (
+            patch("s7commplus.session_auth.legacy_auth.authenticate_real_plc", return_value=(b"b" * 180, b"n" * 24)),
+            pytest.raises(S7ConnectionError, match="return_value=0x8104"),
+        ):
+            conn._renew_session_key_locked()
+
+        assert conn._session_key == old_key
+
+    def test_short_interval_renews_while_requests_remain_usable(self) -> None:
+        conn = self._authenticated_connection()
+        conn._session_key_refresh_interval = 0.01
+        renewed = threading.Event()
+        conn._renew_session_key_locked = MagicMock(side_effect=renewed.set)
+        conn._schedule_session_key_refresh()
+
+        assert renewed.wait(1)
+        conn._send_request = MagicMock(return_value=b"read result")
+        assert conn.send_request(FunctionCode.GET_VARIABLE) == b"read result"
+
+        next_timer = conn._session_key_refresh_timer
+        conn.disconnect()
+        if next_timer is not None:
+            next_timer.join(1)
+            assert not next_timer.is_alive()
+        assert conn._session_key_refresh_timer is None
+
+    def test_refresh_failure_is_terminal_and_surfaces_on_next_request(self) -> None:
+        conn = self._authenticated_connection()
+        conn._iso_conn.disconnect = MagicMock()
+        conn._renew_session_key_locked = MagicMock(side_effect=S7ConnectionError("PLC rejected key"))
+
+        conn._session_key_refresh_callback(conn._session_key_refresh_generation)
+
+        assert not conn.connected
+        assert conn._session_key is None
+        with pytest.raises(S7ConnectionError, match="Legacy SessionKey renewal failed: PLC rejected key"):
+            conn.send_request(FunctionCode.GET_VARIABLE)
+
+    def test_refresh_interval_must_be_positive(self) -> None:
+        conn = S7CommPlusConnection("127.0.0.1")
+        with pytest.raises(ValueError, match="must be positive"):
+            conn.connect(legacy_session_key_refresh_interval=0)
+
+
+class TestSessionKeyDescriptors:
     def test_security_key_descriptor_uses_pending_generated_key(self) -> None:
         from s7commplus.session_auth.keys import KeyFamily, get_public_key
         from s7commplus.session_auth.utils import derive_key_id
@@ -1432,6 +1540,36 @@ class TestAtomicSessionSetup:
         assert not client.session_setup_ok
         assert not client._session_ready
         assert not client._transport_connected
+        writer.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_legacy_session_key_fails_before_setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = S7CommPlusAsyncClient()
+        reader = MagicMock()
+        writer = MagicMock()
+        writer.wait_closed = AsyncMock()
+        monkeypatch.setattr("s7commplus.async_client.asyncio.open_connection", AsyncMock(return_value=(reader, writer)))
+        client._cotp_connect = AsyncMock()
+        client._init_ssl = AsyncMock()
+
+        async def create_session() -> None:
+            client._protocol_version = ProtocolVersion.V1
+            client._session_id = 7
+            client._server_session_version = bytes([0x00, DataType.UDINT, 0x01])
+            client._legacy_session_key_required = True
+
+        client._create_session = AsyncMock(side_effect=create_session)
+        client._setup_session = AsyncMock()
+
+        with pytest.raises(S7ConnectionError, match="synchronous s7commplus.Client"):
+            await client.connect("127.0.0.1")
+
+        client._setup_session.assert_not_awaited()
+        assert not client.connected
+        assert not client.session_setup_ok
+        assert not client._session_ready
+        assert not client._transport_connected
+        assert not client._legacy_session_key_required
         writer.close.assert_called_once()
 
 

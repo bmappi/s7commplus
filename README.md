@@ -2,7 +2,9 @@
 
 Pure-Python S7CommPlus communication for Siemens S7-1200 and S7-1500 PLCs.
 It supports S7CommPlus V1, V2 (TLS), and V3; synchronous and asyncio clients;
-and a server emulator for testing.
+and a server emulator for testing. The synchronous client additionally supports
+legacy V1 SessionKey authentication; the asyncio client rejects that path
+during connection with an actionable error.
 
 ```bash
 pip install s7commplus
@@ -20,6 +22,12 @@ S7CommPlus is used by newer S7-1200/1500 PLCs when classic PUT/GET access is
 disabled. This is an unofficial implementation and is not affiliated with,
 endorsed by, or supported by Siemens AG. Test against an isolated controller
 before using it in production or safety-relevant environments.
+
+Some older PLCs advertise only their SessionKey family instead of a complete
+public-key fingerprint. The synchronous `Client` tries the bounded set of
+bundled keys from that family on fresh sessions and caches the confirmed key
+for the PLC. Set `allow_legacy_key_fallback=False` on `connect()` when key
+probing must be disabled.
 
 ## Development
 

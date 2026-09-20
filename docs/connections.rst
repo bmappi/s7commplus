@@ -22,6 +22,35 @@ and required session setup. Useful state is exposed after connection:
 If session setup is rejected, ``connect`` raises instead of leaving a
 partially usable public client.
 
+Client compatibility
+--------------------
+
+The clients share transport, TLS, session-setup, and response-parsing helpers,
+but legacy SessionKey authentication is currently synchronous-only:
+
+.. list-table:: Authentication support
+   :header-rows: 1
+   :widths: 42 20 20
+
+   * - Controller/session path
+     - ``Client``
+     - ``AsyncClient``
+   * - V1 without legacy SessionKey attributes
+     - Supported
+     - Supported
+   * - V1 with legacy SessionKey authentication
+     - Supported
+     - Not supported; ``connect`` raises before session setup
+   * - V2 or V3 with TLS
+     - Supported
+     - Supported
+
+Use the synchronous client for a PLC that advertises legacy public-key
+fingerprint or session-challenge attributes. The asyncio client detects those
+attributes in the CreateObject response and fails immediately instead of
+returning a misleading connected client. Password legitimation over a
+supported TLS session remains available through ``AsyncClient.authenticate``.
+
 TLS
 ---
 

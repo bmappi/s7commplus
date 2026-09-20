@@ -52,6 +52,19 @@ After SetupSession, all data frames use **V3 framing** with HMAC-SHA256
 (keyed by the first 24 bytes of the session key). No intermediate
 activation sequence is needed — data reads work immediately.
 
+Legacy SessionKeys are renewed every 25 minutes by default, before the PLC's
+key expiry window. Renewal reads a fresh challenge from address 303 and writes
+a new SecurityKey to address 1830 while holding the same lock as application
+requests. The PLC's response is authenticated with the old key; the new key is
+installed only after that response is verified and accepted. A renewal failure
+closes the connection instead of continuing with an expired or ambiguous key.
+
+The interval is configurable in seconds through
+`S7CommPlusClient.connect(legacy_session_key_refresh_interval=...)` (or the
+low-level connection method). Pass `None` to disable automatic renewal. This
+timer applies only to legacy V1-initial SessionKey sessions; TLS sessions do not
+start it.
+
 Note: TIA Portal sends SET_VARIABLE attr 323 + finalize reads before
 data operations, but this is TIA-specific behavior. The HarpoS7
 reference implementation skips it, and V1-initial PLCs reject the
@@ -112,6 +125,42 @@ The `_generated/` modules are transpiled from HarpoS7's C# via
 straight-line uint32 arithmetic function verified byte-for-byte against upstream
 test vectors. They implement a proprietary permutation cipher and cannot be
 meaningfully simplified — the algorithm is designed to resist analysis.
+
+## Artifact provenance and verification
+
+[`artifacts.json`](artifacts.json) is the authoritative inventory for every
+generated Python module and binary runtime table. It pins HarpoS7 v1.1.0 to
+commit `b4ba7fab14bcca4274e69a4d6524a5a61fcd329d` and records each artifact's
+classification, upstream source, generation method, byte size, and SHA-256.
+The original MIT license is in `LICENSE-HarpoS7`.
+
+Run the complete deterministic check from the repository root:
+
+```bash
+python tools/verify_session_auth_artifacts.py
+```
+
+The command fails on a missing, changed, or newly unmanifested artifact and is
+also run by pre-commit CI. The monolith source can be regenerated one file at a
+time with `tools/transpile_harpo_monolith.py`. The constant and binary extraction
+tooling used for the initial port is not yet vendored, so their pinned sizes and
+hashes are the authoritative reproducibility check; do not claim regeneration
+for those files until that tooling is added.
+
+### Review boundary
+
+- Human-maintained flow and extension points live outside `_generated/`.
+- `monolith*.py`, `nine/part*.py`, and `ten/part*.py` are generated source.
+- `_constants.py` and the four `.bin` files are generated data.
+- Package `__init__.py` files and the binary loaders are human-maintained glue.
+
+When generated output intentionally changes, keep that mechanical diff separate
+from handwritten behavior changes where practical. Regenerate from the pinned
+upstream revision, run the upstream-derived vector tests, then update the size
+and SHA-256 in `artifacts.json` in the same generated-output commit. Adding a new
+key family should start with a small authenticator interface parallel to
+`family0/authenticator.py`; callers should never import generated monoliths
+directly.
 
 ## How the blob is built (authenticator.py)
 

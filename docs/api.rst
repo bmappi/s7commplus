@@ -12,6 +12,21 @@ Clients
    :members:
    :undoc-members:
 
+Symbolic tags
+-------------
+
+.. autoclass:: s7commplus.SymbolCatalog
+   :members:
+
+.. autoclass:: s7commplus.SymbolicTag
+   :members:
+
+.. autoclass:: s7commplus.ArrayDimension
+   :members:
+
+.. autoclass:: s7commplus.TagResult
+   :members:
+
 Subscriptions and alarms
 ------------------------
 
