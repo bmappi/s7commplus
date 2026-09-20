@@ -7,6 +7,7 @@ import pytest
 
 from s7commplus.async_client import S7CommPlusAsyncClient
 from s7commplus.client import S7CommPlusClient
+from s7commplus.codec import encode_pvalue_blob
 from s7commplus.protocol import DataType, FunctionCode, ProtocolVersion
 from s7commplus.vlq import decode_uint32_vlq
 
@@ -23,7 +24,7 @@ from s7commplus.vlq import decode_uint32_vlq
         (DataType.REAL, struct.pack(">f", 2.0), b"\x40\x00\x00\x00"),
     ],
 )
-async def test_scalar_write_wire_type(
+async def test_scalar_write_validates_type_but_raw_access_uses_blob_on_wire(
     asynchronous: bool, operation: str, datatype: DataType, data: bytes, wire_value: bytes
 ) -> None:
     if asynchronous:
@@ -64,7 +65,10 @@ async def test_scalar_write_wire_type(
     index, consumed = decode_uint32_vlq(payload, offset)
     assert index == 1
     offset += consumed
-    assert payload[offset : offset + 2 + len(wire_value)] == bytes((0, datatype)) + wire_value
+    if operation == "symbolic":
+        assert payload[offset : offset + 2 + len(wire_value)] == bytes((0, datatype)) + wire_value
+    else:
+        assert payload[offset : offset + len(encode_pvalue_blob(data))] == encode_pvalue_blob(data)
 
 
 @pytest.mark.parametrize("substreamed", [False, True])
@@ -98,7 +102,7 @@ def test_invalid_scalar_width_rejected_before_any_send(substreamed: bool) -> Non
     connection.send_request.assert_not_called()
 
 
-def test_substreamed_area_write_keeps_explicit_type() -> None:
+def test_substreamed_area_write_validates_type_but_uses_blob_on_wire() -> None:
     client = S7CommPlusClient()
     connection = MagicMock()
     connection.requires_substreamed = True
@@ -107,4 +111,4 @@ def test_substreamed_area_write_keeps_explicit_type() -> None:
     client.write_area(82, 0, struct.pack(">I", 300), datatype=DataType.UDINT)
     function, payload = connection.send_request.call_args.args
     assert function == FunctionCode.SET_VAR_SUBSTREAMED
-    assert payload.endswith(bytes((0, DataType.UDINT, 0x82, 0x2C, 1, 0, 0, 0, 0)))
+    assert payload.endswith(encode_pvalue_blob(struct.pack(">I", 300)) + bytes((1, 0, 0, 0, 0)))

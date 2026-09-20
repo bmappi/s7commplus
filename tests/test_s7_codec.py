@@ -411,6 +411,8 @@ class TestPValueBlob:
         encoded = encode_pvalue_blob(data)
         assert encoded[0] == 0x00  # flags
         assert encoded[1] == DataType.BLOB
+        assert encoded[2] == 0  # BlobRootId
+        assert encoded[3] == len(data)
         assert encoded.endswith(data)
 
     def test_empty_blob(self) -> None:
@@ -602,8 +604,9 @@ class TestDecodePValue:
 
     def test_blob(self) -> None:
         blob_data = bytes([0xDE, 0xAD, 0xBE, 0xEF])
+        blob_root_id = encode_uint32_vlq(0)
         vlq_len = encode_uint32_vlq(len(blob_data))
-        data = bytes([0x00, DataType.BLOB]) + vlq_len + blob_data
+        data = bytes([0x00, DataType.BLOB]) + blob_root_id + vlq_len + blob_data
         result, consumed = decode_pvalue_to_bytes(data, 0)
         assert result == blob_data
 

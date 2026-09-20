@@ -65,10 +65,28 @@ PLC_IP = os.environ.get("PLC_IP", "10.10.10.100")
 PLC_RACK = int(os.environ.get("PLC_RACK", "0"))
 PLC_SLOT = int(os.environ.get("PLC_SLOT", "1"))
 PLC_PORT = int(os.environ.get("PLC_PORT", "102"))
+PLC_USE_TLS = os.environ.get("PLC_USE_TLS", "").lower() in {"1", "true", "yes"}
+PLC_TLS_CERT = os.environ.get("PLC_TLS_CERT")
+PLC_TLS_KEY = os.environ.get("PLC_TLS_KEY")
+PLC_TLS_CA = os.environ.get("PLC_TLS_CA")
 
 # Data block numbers
 DB_READ_ONLY = int(os.environ.get("PLC_DB_READ", "1"))
 DB_READ_WRITE = int(os.environ.get("PLC_DB_WRITE", "2"))
+
+
+def connect_client(client: S7CommPlusClient) -> None:
+    """Connect using the shared real-PLC TLS configuration."""
+    client.connect(
+        PLC_IP,
+        PLC_PORT,
+        PLC_RACK,
+        PLC_SLOT,
+        use_tls=PLC_USE_TLS,
+        tls_cert=PLC_TLS_CERT,
+        tls_key=PLC_TLS_KEY,
+        tls_ca=PLC_TLS_CA,
+    )
 
 
 # =============================================================================
@@ -126,7 +144,7 @@ class TestS7CommPlusConnection(unittest.TestCase):
     def test_connect_disconnect(self) -> None:
         """Test connect() and disconnect()."""
         client = S7CommPlusClient()
-        client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(client)
         self.assertTrue(client.connected)
         self.assertGreater(client.protocol_version, 0)
         self.assertGreater(client.session_id, 0)
@@ -136,7 +154,7 @@ class TestS7CommPlusConnection(unittest.TestCase):
     def test_context_manager(self) -> None:
         """Test S7CommPlusClient as context manager."""
         with S7CommPlusClient() as client:
-            client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+            connect_client(client)
             self.assertTrue(client.connected)
         # After exiting context, client should be disconnected
 
@@ -157,7 +175,7 @@ class TestS7CommPlusDBRead(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.client = S7CommPlusClient()
-        cls.client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(cls.client)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -253,6 +271,7 @@ class TestS7CommPlusDBRead(unittest.TestCase):
 
 
 @pytest.mark.e2e
+@pytest.mark.plc_write
 class TestS7CommPlusDBWrite(unittest.TestCase):
     """Tests for db_write() - writing to DB2 (read/write)."""
 
@@ -261,7 +280,7 @@ class TestS7CommPlusDBWrite(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.client = S7CommPlusClient()
-        cls.client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(cls.client)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -350,7 +369,7 @@ class TestS7CommPlusMultiRead(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.client = S7CommPlusClient()
-        cls.client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(cls.client)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -376,6 +395,7 @@ class TestS7CommPlusMultiRead(unittest.TestCase):
         dword_val = struct.unpack(">I", results[2])[0]
         self.assertEqual(EXPECTED_DWORD1, dword_val)
 
+    @pytest.mark.plc_write
     def test_multi_read_across_dbs(self) -> None:
         """Test db_read_multi() across different data blocks."""
         # Write a known value to DB2 first
@@ -402,7 +422,7 @@ class TestS7CommPlusExplore(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.client = S7CommPlusClient()
-        cls.client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(cls.client)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -432,7 +452,7 @@ class TestS7CommPlusDiagnostics(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.client = S7CommPlusClient()
-        cls.client.connect(PLC_IP, PLC_PORT, PLC_RACK, PLC_SLOT)
+        connect_client(cls.client)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -535,6 +555,7 @@ class TestS7CommPlusDiagnostics(unittest.TestCase):
 
         print(f"\n{'=' * 60}")
 
+    @pytest.mark.administrative
     def test_diag_raw_set_variable(self) -> None:
         """Try SetVariable (0x04F2) instead of SetMultiVariables to see if PLC responds differently."""
         from s7commplus.protocol import FunctionCode

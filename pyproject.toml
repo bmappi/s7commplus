@@ -28,7 +28,7 @@ classifiers = [
 dependencies = ["cryptography>=41"]
 
 [project.optional-dependencies]
-test = ["pytest", "pytest-asyncio", "pytest-cov", "hypothesis", "mypy", "ruff"]
+test = ["pytest", "pytest-asyncio", "pytest-bdd>=8.1,<9", "pytest-cov", "hypothesis", "mypy", "ruff"]
 docs = ["sphinx>=7.2", "furo>=2024.8.6"]
 
 [project.urls]
@@ -53,6 +53,11 @@ asyncio_mode = "auto"
 markers = [
     "conformance: protocol conformance tests",
     "e2e: end-to-end tests requiring a real PLC connection",
+    "real_plc: versioned real-PLC acceptance scenario",
+    "smoke: read-only real-PLC acceptance scenario",
+    "write: real-PLC scenario that changes and restores scratch data",
+    "plc_write: existing real-PLC test that modifies scratch data",
+    "administrative: disruptive real-PLC scenario requiring separate opt-in",
 ]
 
 [tool.mypy]

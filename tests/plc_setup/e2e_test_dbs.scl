@@ -1,0 +1,121 @@
+// =============================================================================
+// S7CommPlus real-PLC acceptance data blocks
+//
+// Import this file into TIA Portal and download both blocks to the dedicated
+// test PLC. The versioned scenarios use DB1 for reads and DB2 as scratch space.
+// Disable "Optimized block access" so absolute byte offsets remain stable.
+//
+// Byte layout (37 bytes total):
+//   0 Int, 2 Int, 4 Real, 8 Real, 12 Byte, 13 Byte, 14 Word, 16 Word,
+//   18 DWord, 22 DWord, 26 DInt, 30 DInt, 34 Char, 35 Char, 36.0-36.7 Bool.
+// =============================================================================
+
+DATA_BLOCK "Read_only"
+{ S7_Optimized_Access := 'FALSE' }
+    VERSION : 0.1
+    NON_RETAIN
+
+    VAR
+        int1    : Int;
+        int2    : Int;
+        float1  : Real;
+        float2  : Real;
+        byte1   : Byte;
+        byte2   : Byte;
+        word1   : Word;
+        word2   : Word;
+        dword1  : DWord;
+        dword2  : DWord;
+        dint1   : DInt;
+        dint2   : DInt;
+        char1   : Char;
+        char2   : Char;
+        bool0   : Bool;
+        bool1   : Bool;
+        bool2   : Bool;
+        bool3   : Bool;
+        bool4   : Bool;
+        bool5   : Bool;
+        bool6   : Bool;
+        bool7   : Bool;
+    END_VAR
+
+BEGIN
+    int1    := 10;
+    int2    := 255;
+    float1  := 123.45;
+    float2  := 543.21;
+    byte1   := 16#0F;
+    byte2   := 16#F0;
+    word1   := 16#ABCD;
+    word2   := 16#1234;
+    dword1  := 16#12345678;
+    dword2  := 16#89ABCDEF;
+    dint1   := 2147483647;
+    dint2   := 42;
+    char1   := 'F';
+    char2   := '-';
+    bool0   := TRUE;
+    bool1   := FALSE;
+    bool2   := FALSE;
+    bool3   := FALSE;
+    bool4   := FALSE;
+    bool5   := FALSE;
+    bool6   := FALSE;
+    bool7   := FALSE;
+END_DATA_BLOCK
+
+DATA_BLOCK "Data_block_2"
+{ S7_Optimized_Access := 'FALSE' }
+    VERSION : 0.1
+    NON_RETAIN
+
+    VAR
+        int1    : Int;
+        int2    : Int;
+        float1  : Real;
+        float2  : Real;
+        byte1   : Byte;
+        byte2   : Byte;
+        word1   : Word;
+        word2   : Word;
+        dword1  : DWord;
+        dword2  : DWord;
+        dint1   : DInt;
+        dint2   : DInt;
+        char1   : Char;
+        char2   : Char;
+        bool0   : Bool;
+        bool1   : Bool;
+        bool2   : Bool;
+        bool3   : Bool;
+        bool4   : Bool;
+        bool5   : Bool;
+        bool6   : Bool;
+        bool7   : Bool;
+    END_VAR
+
+BEGIN
+    int1    := 10;
+    int2    := 255;
+    float1  := 123.45;
+    float2  := 543.21;
+    byte1   := 16#0F;
+    byte2   := 16#F0;
+    word1   := 16#ABCD;
+    word2   := 16#1234;
+    dword1  := 16#12345678;
+    dword2  := 16#89ABCDEF;
+    dint1   := 2147483647;
+    dint2   := 42;
+    char1   := 'F';
+    char2   := '-';
+    bool0   := TRUE;
+    bool1   := FALSE;
+    bool2   := FALSE;
+    bool3   := FALSE;
+    bool4   := FALSE;
+    bool5   := FALSE;
+    bool6   := FALSE;
+    bool7   := FALSE;
+END_DATA_BLOCK
