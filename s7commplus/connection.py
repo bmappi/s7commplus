@@ -51,6 +51,7 @@ from types import TracebackType
 from typing import Any, Optional, Type
 
 from .transport import ISOTCPConnection
+from .session_auth.keys import KeyFamily
 
 from .codec import decode_header, encode_header, encode_object_qualifier, parse_create_object_attributes
 from .error import S7ConnectionError
@@ -134,7 +135,7 @@ def _incoming_response_sequence(frame: bytes) -> int:
         data = data[1 + hash_length :]
     if len(data) < 10:
         raise S7ConnectionError("Response too short")
-    return struct.unpack_from(">H", data, 7)[0]
+    return int(struct.unpack_from(">H", data, 7)[0])
 
 
 def _is_stale_response_sequence(sequence: int, expected_sequence: int) -> bool:
@@ -210,6 +211,7 @@ _S7_PREFERRED_GROUPS = ("X25519",)
 _MAX_SYSTEM_EVENTS_PER_RESPONSE = 16
 _MAX_STALE_RESPONSES_PER_REQUEST = 16
 _SYSTEM_EVENT_RETURN_VALUE_ID = 40305
+_DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL = 25 * 60.0
 
 
 def _system_event_return_value(payload: bytes) -> Optional[int]:
@@ -228,7 +230,7 @@ def _system_event_return_value(payload: bytes) -> Optional[int]:
         raise S7ProtocolError(f"Malformed S7CommPlus SystemEvent Struct: {payload.hex()}")
 
     offset = 24  # fixed-width PValue header + Struct id
-    scalar_sizes = {
+    scalar_sizes: dict[int, int] = {
         DataType.BOOL: 1,
         DataType.USINT: 1,
         DataType.UINT: 2,
@@ -304,20 +306,26 @@ def _set_s7_groups(ctx: ssl.SSLContext) -> None:
     )
 
 
-def _verify_v3_hmac(protected: bytes, session_key: bytes) -> bytes:
+def _verify_v3_hmac(protected: bytes, verifier: bytes | hmac.HMAC) -> bytes:
     """Verify and remove the V3 HMAC prefix from application data."""
-    from .error import S7ConnectionError
+    from .error import S7IntegrityError
 
     if not protected:
-        raise S7ConnectionError("Empty V3 frame")
+        raise S7IntegrityError("Empty authenticated V3 frame")
     digest_length = protected[0]
-    if digest_length != hashlib.sha256().digest_size or len(protected) < 1 + digest_length:
-        raise S7ConnectionError(f"Invalid V3 HMAC length: {digest_length}")
+    if digest_length != hashlib.sha256().digest_size:
+        raise S7IntegrityError(f"Invalid V3 HMAC digest length: {digest_length}")
+    if len(protected) < 1 + digest_length:
+        raise S7IntegrityError("Truncated V3 HMAC digest")
     received_digest = protected[1 : 1 + digest_length]
     application_data = protected[1 + digest_length :]
-    expected_digest = hmac.new(session_key[:24], application_data, hashlib.sha256).digest()
+    if isinstance(verifier, bytes):
+        expected_digest = hmac.new(verifier[:24], application_data, hashlib.sha256).digest()
+    else:
+        verifier.update(application_data)
+        expected_digest = verifier.digest()
     if not hmac.compare_digest(received_digest, expected_digest):
-        raise S7ConnectionError("Invalid V3 HMAC")
+        raise S7IntegrityError("S7CommPlus response integrity check failed")
     return bytes(application_data)
 
 
@@ -552,8 +560,12 @@ class S7CommPlusConnection:
         # HMAC packet integrity after authentication.
         self._session_key: Optional[bytes] = None
         self._session_auth_public_key: bytes = b""
-        self._session_auth_family: int = 0
+        self._session_auth_family = KeyFamily.S7_1500
         self._session_key_fingerprint_override: Optional[str] = None
+        self._session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL
+        self._session_key_refresh_timer: Optional[threading.Timer] = None
+        self._session_key_refresh_generation = 0
+        self._session_key_refresh_error: Optional[Exception] = None
 
         # V2+ IntegrityId tracking
         self._integrity_id_read: int = 0
@@ -566,7 +578,10 @@ class S7CommPlusConnection:
         # Password for post-auth legitimation (V1-initial PLCs)
         self._connect_password: str = ""
         self._notification_frames: deque[bytes] = deque()
-        self._request_lock = threading.Lock()
+        # Reentrant because integrity failures disconnect from inside a
+        # serialized request. Disconnect itself also takes this lock so a
+        # renewal cannot race transport teardown.
+        self._request_lock = threading.RLock()
 
         # Effective protection level, read once the session is up
         self._protection_level: Optional[int] = None
@@ -639,6 +654,7 @@ class S7CommPlusConnection:
         tls_key: Optional[str] = None,
         tls_ca: Optional[str] = None,
         password: str = "",
+        legacy_session_key_refresh_interval: Optional[float] = _DEFAULT_LEGACY_SESSION_KEY_REFRESH_INTERVAL,
         *,
         _session_key_fingerprint: Optional[str] = None,
     ) -> None:
@@ -658,7 +674,14 @@ class S7CommPlusConnection:
             tls_cert: Path to client TLS certificate (PEM)
             tls_key: Path to client private key (PEM)
             tls_ca: Path to CA certificate for PLC verification (PEM)
+            legacy_session_key_refresh_interval: Seconds between legacy
+                SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
+                disable automatic renewal.
         """
+        if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
+            raise ValueError("legacy_session_key_refresh_interval must be positive or None")
+        self._session_key_refresh_interval = legacy_session_key_refresh_interval
+        self._session_key_refresh_error = None
         self._connect_password = password
         self._session_key_fingerprint_override = _session_key_fingerprint
         try:
@@ -752,6 +775,7 @@ class S7CommPlusConnection:
                     logger.info(f"PLC reports protection level: {self._protection_level}")
 
             self._connected = True
+            self._schedule_session_key_refresh()
 
             logger.info(
                 f"S7CommPlus connected to {self.host}:{self.port}, "
@@ -896,19 +920,18 @@ class S7CommPlusConnection:
         _check_set_variable_response(resp_payload)
 
     def collect_explore_frames(self, first_payload: bytes) -> bytes:
-        """Collect multi-fragment EXPLORE continuation frames for V3 PLCs.
+        """Collect unauthenticated multi-fragment EXPLORE continuation frames.
 
         On V3 PLCs (FW >= V4.5) a large EXPLORE response (e.g. RID 0x8A11FFFF)
         spans multiple TPKT frames.  The first frame is the normal response
         (already stripped of its 10-byte header by send_request).  Continuation
-        frames carry **no** response header — they are raw BLOB data protected
-        only by a V3 HMAC prefix.  The caller must concatenate them before
-        parsing.
+        frames carry no response header. Authenticated callers must use
+        ``send_request(..., reassemble=True)`` because this legacy helper no
+        longer has the first frame bytes needed to verify cumulative digests.
 
         Termination: a ``frag_len == 0`` frame is the standard S7CommPlus
-        end-of-stream trailer.  As a fallback, a frame whose body (after HMAC
-        strip) is measurably shorter than the first frame body is treated as the
-        last fragment (5-byte tolerance).
+        end-of-stream trailer. As a fallback, a measurably shorter frame body is
+        treated as the last fragment (5-byte tolerance).
 
         Collection is capped by ``_MAX_REASSEMBLED_FRAGMENTS`` and
         ``_MAX_REASSEMBLED_BYTES`` to prevent unbounded allocation on malformed
@@ -921,6 +944,14 @@ class S7CommPlusConnection:
         Returns:
             All fragment payloads concatenated (first_payload + continuations).
         """
+        if self._session_key is not None:
+            from .error import S7ProtocolError
+
+            raise S7ProtocolError(
+                "Authenticated Explore continuations require send_request(..., reassemble=True) so cumulative digests "
+                "can be verified"
+            )
+
         # The first frame body (already header-stripped) was originally
         # len(first_payload) + 10 bytes on the wire (10-byte response header).
         # Continuation frames of the same "full" size will be that long after
@@ -946,10 +977,6 @@ class S7CommPlusConnection:
                 if frag_len == 0:
                     break  # standard S7CommPlus end-of-stream trailer
                 body = raw[4 : 4 + frag_len]
-                # V3 non-TLS: strip the HMAC prefix ([hash_len][hash_bytes])
-                if self._protocol_version >= ProtocolVersion.V3 and len(body) > 33:
-                    hash_len = body[0]
-                    body = body[1 + hash_len :]
                 if not body:
                     break
                 all_data += body
@@ -962,6 +989,13 @@ class S7CommPlusConnection:
 
     def disconnect(self) -> None:
         """Disconnect from PLC."""
+        self._stop_session_key_refresh()
+        with self._request_lock:
+            self._session_key_refresh_error = None
+            self._disconnect()
+
+    def _disconnect(self) -> None:
+        """Clear connection state without changing a stored refresh failure."""
         if self._session_ready and self._session_id:
             try:
                 self._delete_session()
@@ -986,13 +1020,78 @@ class S7CommPlusConnection:
         self._session_challenge = None
         self._session_key = None
         self._session_auth_public_key = b""
-        self._session_auth_family = 0
+        self._session_auth_family = KeyFamily.S7_1500
         self._with_integrity_id = False
         self._integrity_id_read = 0
         self._integrity_id_write = 0
         self._protection_level = None
         self._notification_frames.clear()
         self._iso_conn.disconnect()
+
+    def _invalidate_integrity_failure(self) -> None:
+        """Discard authenticated state without writing to an untrusted stream."""
+        self._session_ready = False
+        self.disconnect()
+
+    def _stop_session_key_refresh(self) -> None:
+        """Cancel pending legacy SessionKey renewal activity."""
+        self._session_key_refresh_generation += 1
+        timer = self._session_key_refresh_timer
+        self._session_key_refresh_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_session_key_refresh(self) -> None:
+        """Schedule one renewal for an authenticated legacy session."""
+        interval = self._session_key_refresh_interval
+        if interval is None or self._session_key is None or not self._connected:
+            return
+        generation = self._session_key_refresh_generation
+        timer = threading.Timer(interval, self._session_key_refresh_callback, args=(generation,))
+        timer.daemon = True
+        self._session_key_refresh_timer = timer
+        timer.start()
+
+    def _session_key_refresh_callback(self, generation: int) -> None:
+        """Renew under the request lock, or make a failed renewal terminal."""
+        try:
+            with self._request_lock:
+                if generation != self._session_key_refresh_generation or not self._connected:
+                    return
+                self._session_key_refresh_timer = None
+                self._renew_session_key_locked()
+                if generation == self._session_key_refresh_generation:
+                    self._schedule_session_key_refresh()
+        except Exception as exc:
+            failure = S7ConnectionError(f"Legacy SessionKey renewal failed: {exc}")
+            logger.error("%s", failure)
+            self._session_key_refresh_error = failure
+            self._stop_session_key_refresh()
+            self._session_ready = False
+            self._session_id = 0
+            self._disconnect()
+
+    def _renew_session_key_locked(self) -> None:
+        """Perform the challenge/SecurityKey exchange while the old key is active."""
+        if self._session_key is None or not self._session_auth_public_key:
+            raise S7ConnectionError("Legacy SessionKey renewal prerequisites are unavailable")
+
+        from .session_auth.keys import KeyFamily
+        from .session_auth.legacy_auth import authenticate_real_plc
+
+        integrity_tail = 3 if self._session_auth_family == KeyFamily.S7_1200 else 4
+        challenge_payload = self._build_get_var_substreamed(self._session_id, LegitimationId.SERVER_SESSION_REQUEST)
+        challenge_response = self._send_request(FunctionCode.GET_VAR_SUBSTREAMED, challenge_payload, integrity_tail, False)
+        challenge = _parse_get_var_substreamed_response(challenge_response)
+        if len(challenge) != 20:
+            raise S7ConnectionError(f"SessionKey renewal returned an unexpected {len(challenge)}-byte challenge")
+        blob, new_session_key = authenticate_real_plc(challenge, self._session_auth_public_key, self._session_auth_family)
+        security_key = self._encode_security_key_struct(blob, new_session_key)
+        renewal_payload = _build_set_variable_payload(self._session_id, LegitimationId.SESSION_SETUP_LEGITIMATION, security_key)
+        renewal_response = self._send_request(FunctionCode.SET_VARIABLE, renewal_payload, 4, False)
+        _check_set_variable_response(renewal_response)
+        self._session_key = new_session_key
+        logger.info("Legacy SessionKey renewed successfully")
 
     def send_request(self, function_code: int, payload: bytes = b"", integrity_tail: int = 4, reassemble: bool = False) -> bytes:
         """Serialize one request/response exchange on the connection."""
@@ -1018,6 +1117,8 @@ class S7CommPlusConnection:
         Returns:
             Response payload (after the 10-byte response header)
         """
+        if self._session_key_refresh_error is not None:
+            raise self._session_key_refresh_error
         if not (self._connected or self._session_ready):
             from .error import S7ConnectionError
 
@@ -1114,15 +1215,25 @@ class S7CommPlusConnection:
         version, data_length, consumed = decode_header(response_frame)
         logger.debug(f"  Frame header: version=V{version}, data_length={data_length}, header_size={consumed}")
 
+        if self._session_key is not None and version != ProtocolVersion.V3:
+            from .error import S7IntegrityError
+
+            self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+
         response = response_frame[consumed : consumed + data_length]
 
         # V3 responses have a hash-length byte + HMAC prefix before the payload.
         if version == ProtocolVersion.V3:
-            if self._session_key is None:
-                from .error import S7ConnectionError
+            from .error import S7ConnectionError, S7IntegrityError
 
+            if self._session_key is None:
                 raise S7ConnectionError("V3 response received without a session key")
-            response = _verify_v3_hmac(response, self._session_key)
+            try:
+                response = _verify_v3_hmac(response, self._session_key)
+            except S7IntegrityError:
+                self._invalidate_integrity_failure()
+                raise
             logger.debug("  V3 HMAC verified")
 
         logger.debug(f"  Response data ({len(response)} bytes): {response.hex(' ')}")
@@ -1160,6 +1271,23 @@ class S7CommPlusConnection:
 
         return resp_payload
 
+    def _verified_incoming_data(self, frame: bytes) -> bytes:
+        """Return application data after authenticating the complete frame."""
+        from .error import S7IntegrityError
+
+        version, data_length, consumed = decode_header(frame)
+        data = bytes(frame[consumed : consumed + data_length])
+        if self._session_key is None:
+            return data
+        if version != ProtocolVersion.V3:
+            self._invalidate_integrity_failure()
+            raise S7IntegrityError(f"Authenticated response used unauthenticated frame version V{version}; reconnect")
+        try:
+            return _verify_v3_hmac(data, self._session_key)
+        except S7IntegrityError:
+            self._invalidate_integrity_failure()
+            raise
+
     def _recv_response_frame(self, expected_sequence: Optional[int] = None) -> bytes:
         """Receive the next response, queueing notifications and consuming non-fatal SystemEvents."""
         from .error import S7ConnectionError, S7ProtocolError
@@ -1177,16 +1305,17 @@ class S7CommPlusConnection:
                 if system_events > _MAX_SYSTEM_EVENTS_PER_RESPONSE:
                     raise S7ProtocolError("Too many S7CommPlus SystemEvents while waiting for a response")
                 continue
-            if data_length < 10:
+            data = self._verified_incoming_data(response_frame)
+            if len(data) < 10:
                 return response_frame
-            opcode = _incoming_frame_opcode(response_frame)
+            opcode = data[0]
             if opcode == Opcode.NOTIFICATION:
                 self._notification_frames.append(response_frame)
                 continue
             if opcode not in (Opcode.RESPONSE, Opcode.RESPONSE2):
                 raise S7ProtocolError(f"Unexpected S7CommPlus opcode 0x{opcode:02X} while waiting for a response")
             if expected_sequence is not None:
-                sequence = _incoming_response_sequence(response_frame)
+                sequence = int.from_bytes(data[7:9], "big")
                 if _is_stale_response_sequence(sequence, expected_sequence):
                     stale_responses += 1
                     logger.warning(
@@ -1224,7 +1353,8 @@ class S7CommPlusConnection:
 
             raise S7ConnectionError("Not connected")
         frame = self._notification_frames.popleft() if self._notification_frames else self._recv_s7_data()
-        if not self._is_notification_frame(frame):
+        data = self._verified_incoming_data(frame)
+        if not data or data[0] != Opcode.NOTIFICATION:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Expected an S7CommPlus notification")
@@ -1244,7 +1374,7 @@ class S7CommPlusConnection:
         of every fragment until the trailer is seen. Works for single-PDU responses
         too (one fragment immediately followed by the trailer).
         """
-        from .error import S7ConnectionError
+        from .error import S7ConnectionError, S7IntegrityError
 
         buf = bytearray(initial_data)
 
@@ -1257,11 +1387,32 @@ class S7CommPlusConnection:
 
         data = bytearray()
         fragments = 0
+        expected_version: int | None = None
+        digest_state = hmac.new(self._session_key[:24], digestmod=hashlib.sha256) if self._session_key is not None else None
         while True:
             ensure(4)
             if buf[0] != 0x72:
                 raise S7ConnectionError("Expected S7CommPlus fragment header (0x72)")
             fragment_version = buf[1]
+            if self._session_key is not None and fragment_version != ProtocolVersion.V3:
+                self._invalidate_integrity_failure()
+                raise S7IntegrityError(
+                    f"Authenticated response used unauthenticated frame version V{fragment_version}; reconnect"
+                )
+            if expected_version is None:
+                expected_version = fragment_version
+            elif fragment_version != expected_version:
+                if self._session_key is not None:
+                    from .error import S7IntegrityError
+
+                    self._invalidate_integrity_failure()
+                    raise S7IntegrityError(
+                        f"Authenticated S7CommPlus response changed fragment version from {expected_version} "
+                        f"to {fragment_version}; reconnect"
+                    )
+                raise S7ConnectionError(
+                    f"S7CommPlus response changed fragment version from {expected_version} to {fragment_version}"
+                )
             frag_len = (buf[2] << 8) | buf[3]
             del buf[:4]
             if frag_len == 0:
@@ -1270,9 +1421,13 @@ class S7CommPlusConnection:
             fragment_data = bytes(buf[:frag_len])
             del buf[:frag_len]
             if fragment_version == ProtocolVersion.V3:
-                if self._session_key is None:
+                if digest_state is None:
                     raise S7ConnectionError("V3 response received without a session key")
-                fragment_data = _verify_v3_hmac(fragment_data, self._session_key)
+                try:
+                    fragment_data = _verify_v3_hmac(fragment_data, digest_state)
+                except S7IntegrityError:
+                    self._invalidate_integrity_failure()
+                    raise
             data.extend(fragment_data)
             fragments += 1
             if fragments > self._MAX_REASSEMBLED_FRAGMENTS or len(data) > self._MAX_REASSEMBLED_BYTES:
@@ -1280,7 +1435,7 @@ class S7CommPlusConnection:
             # The next 4 bytes are either the trailer (0x72 ver 0x0000) or the next
             # fragment's header (0x72 ver len>0).
             ensure(4)
-            if buf[0] == 0x72 and buf[2] == 0 and buf[3] == 0:
+            if buf[0] == 0x72 and buf[1] == expected_version and buf[2] == 0 and buf[3] == 0:
                 del buf[:4]  # consume trailer — last fragment
                 break
         return bytes(data)
@@ -1747,7 +1902,6 @@ class S7CommPlusConnection:
             from .error import S7ConnectionError
 
             raise S7ConnectionError("Post-auth legitimation failed: no session key")
-
         legit_blob = solve_legitimate_challenge_real_plc(
             legit_challenge,
             self._session_auth_public_key,

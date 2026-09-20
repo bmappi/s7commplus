@@ -129,6 +129,7 @@ class S7CommPlusClient:
         tls_ca: Optional[str] = None,
         password: Optional[str] = None,
         allow_legacy_key_fallback: bool = True,
+        legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -144,6 +145,8 @@ class S7CommPlusClient:
             password: PLC password for legitimation (V2+ with TLS)
             allow_legacy_key_fallback: Try known same-family public keys on
                 fresh sessions when a legacy PLC omits its key id.
+            legacy_session_key_refresh_interval: Seconds between legacy
+                SessionKey renewals, or ``None`` to disable them.
         """
         self._connect_params = {
             "host": host,
@@ -154,6 +157,7 @@ class S7CommPlusClient:
             "tls_ca": tls_ca,
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
+            "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
         }
         self._open_connection()
 
@@ -197,6 +201,7 @@ class S7CommPlusClient:
             tls_key=p["tls_key"],
             tls_ca=p["tls_ca"],
             password=p["password"] or "",
+            legacy_session_key_refresh_interval=p["legacy_session_key_refresh_interval"],
             _session_key_fingerprint=fingerprint,
         )
         if p["password"] is not None and self._connection.tls_active and not self._connection.requires_substreamed:
