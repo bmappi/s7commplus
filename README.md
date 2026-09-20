@@ -2,7 +2,9 @@
 
 Pure-Python S7CommPlus communication for Siemens S7-1200 and S7-1500 PLCs.
 It supports S7CommPlus V1, V2 (TLS), and V3; synchronous and asyncio clients;
-and a server emulator for testing.
+and a server emulator for testing. The synchronous client additionally supports
+legacy V1 SessionKey authentication; the asyncio client rejects that path
+during connection with an actionable error.
 
 ```bash
 pip install s7commplus
