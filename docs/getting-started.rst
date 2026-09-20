@@ -4,11 +4,16 @@ Getting started
 Requirements
 ------------
 
-``s7commplus`` supports Python 3.10 and newer. Install it from PyPI:
+``s7commplus`` supports Python 3.10 and newer. For normal use, install the
+latest stable release from `PyPI <https://pypi.org/project/s7commplus/>`_:
 
 .. code-block:: console
 
-   python -m pip install s7commplus
+   python -m pip install --upgrade s7commplus
+
+Cloning the GitHub repository is not part of the installation procedure. A
+source checkout is only needed to develop the package or run its test suites;
+see :doc:`development` for that workflow.
 
 The PLC must be reachable over TCP, normally on port 102. Rack and slot
 arguments are accepted for API symmetry but are not used by S7CommPlus.

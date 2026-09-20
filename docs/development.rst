@@ -4,6 +4,11 @@ Development and releases
 Set up a checkout
 -----------------
 
+This source-checkout workflow is for developing and testing ``s7commplus``.
+Applications should instead install the stable release from `PyPI
+<https://pypi.org/project/s7commplus/>`_ as described in
+:doc:`getting-started`.
+
 .. code-block:: console
 
    git clone https://github.com/gijzelaerr/s7commplus.git

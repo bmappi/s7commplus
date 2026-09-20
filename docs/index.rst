@@ -20,7 +20,9 @@ browsing, subscriptions and alarms, plus a server emulator for tests.
 Start here
 ----------
 
-Install the package and perform a first read in :doc:`getting-started`. Then
+Install the stable package from `PyPI <https://pypi.org/project/s7commplus/>`_
+and perform a first read in :doc:`getting-started`. Clone the source repository
+only for development and testing, as described in :doc:`development`. Then
 choose the guide that matches the PLC operation you need.
 
 .. toctree::

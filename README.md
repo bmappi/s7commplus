@@ -6,9 +6,17 @@ and a server emulator for testing. The synchronous client additionally supports
 legacy V1 SessionKey authentication; the asyncio client rejects that path
 during connection with an actionable error.
 
+## Installation
+
+Install the latest stable release from
+[PyPI](https://pypi.org/project/s7commplus/):
+
 ```bash
-pip install s7commplus
+python -m pip install --upgrade s7commplus
 ```
+
+See the [s7commplus documentation](https://s7commplus.readthedocs.io/) for the
+complete user guide and API reference.
 
 ```python
 from s7commplus import Client
@@ -31,18 +39,25 @@ probing must be disabled.
 
 ## Development
 
+Cloning the repository is only necessary for developing or testing
+`s7commplus`. To use the stable library in an application, install it from PyPI
+as shown above.
+
 ```bash
-python -m pip install -e '.[test]'
+git clone https://github.com/gijzelaerr/s7commplus.git
+cd s7commplus
+python -m pip install -e '.[test,docs]'
 pytest
 mypy s7commplus
 ruff check s7commplus tests
 ruff format --check s7commplus tests
 ```
 
-Documentation is built by Read the Docs and validated in CI:
+The published documentation is hosted on
+[Read the Docs](https://s7commplus.readthedocs.io/) and validated in CI. To
+build it locally from a development checkout:
 
 ```bash
-python -m pip install -e '.[docs]'
 sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
