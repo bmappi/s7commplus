@@ -134,6 +134,8 @@ class S7CommPlusClient:
         password: Optional[str] = None,
         allow_legacy_key_fallback: bool = True,
         legacy_session_key_refresh_interval: Optional[float] = 25 * 60.0,
+        *,
+        legacy_s7_1500: bool = False,
     ) -> None:
         """Connect to an S7-1200/1500 PLC using S7CommPlus.
 
@@ -151,7 +153,11 @@ class S7CommPlusClient:
                 fresh sessions when a legacy PLC omits its key id.
             legacy_session_key_refresh_interval: Seconds between legacy
                 SessionKey renewals, or ``None`` to disable them.
+            legacy_s7_1500: Enable the non-TLS S7-1500 FW 2.6 browse/read
+                profile validated in issue #12.
         """
+        if legacy_s7_1500 and use_tls:
+            raise ValueError("legacy_s7_1500 requires use_tls=False")
         self._symbol_catalog = None
         self._connect_params = {
             "host": host,
@@ -163,6 +169,7 @@ class S7CommPlusClient:
             "password": password,
             "allow_legacy_key_fallback": allow_legacy_key_fallback,
             "legacy_session_key_refresh_interval": legacy_session_key_refresh_interval,
+            "legacy_s7_1500": legacy_s7_1500,
         }
         self._open_connection()
 
@@ -199,7 +206,7 @@ class S7CommPlusClient:
         """Open exactly one transport/session, optionally with one key candidate."""
         assert self._connect_params is not None
         p = self._connect_params
-        self._connection = S7CommPlusConnection(host=p["host"], port=p["port"])
+        self._connection = S7CommPlusConnection(host=p["host"], port=p["port"], legacy_s7_1500=p["legacy_s7_1500"])
         self._connection.connect(
             use_tls=p["use_tls"],
             tls_cert=p["tls_cert"],
@@ -478,8 +485,8 @@ class S7CommPlusClient:
         if self._connection is None:
             raise RuntimeError("Not connected")
 
-        # TODO: Send the correct integrity id once available
-        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, self._connection.protocol_version)
+        version = ProtocolVersion.V2 if self._connection.legacy_s7_1500 else self._connection.protocol_version
+        payload = _build_symbolic_read_payload(access_area, lids, symbol_crc, version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response)
         if not results or results[0] is None:
@@ -506,7 +513,8 @@ class S7CommPlusClient:
         if not items:
             return []
 
-        payload = _build_multi_symbolic_read_payload(items, self._connection.protocol_version)
+        version = ProtocolVersion.V2 if self._connection.legacy_s7_1500 else self._connection.protocol_version
+        payload = _build_multi_symbolic_read_payload(items, version)
         response = self._connection.send_request(FunctionCode.GET_MULTI_VARIABLES, payload)
         results = _parse_read_response(response, expected_count=len(items))
         if len(results) != len(items):
@@ -784,7 +792,7 @@ class S7CommPlusClient:
         if self._connection is None:
             raise RuntimeError("Not connected")
 
-        if self._connection._session_key is not None:
+        if self._connection._session_key is not None and not self._connection.legacy_s7_1500:
             # V1-initial PLCs: explore the DB wildcard address (0x8A11FFFF)
             # matching TIA Portal's browse pattern
             payload = _build_explore_payload_v3(0x8A11FFFF)

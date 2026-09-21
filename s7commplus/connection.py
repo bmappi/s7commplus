@@ -47,6 +47,7 @@ import struct
 import tempfile
 import threading
 from collections import deque
+from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Optional, Type
 
@@ -350,6 +351,17 @@ def _build_get_var_substreamed_payload(
     return payload
 
 
+def _response_pvalue_offset(payload: bytes, offset: int, supported: Callable[[int, int], bool]) -> int:
+    """Locate a PValue directly after ReturnValue or after a zero marker."""
+    if offset + 2 <= len(payload) and supported(payload[offset], payload[offset + 1]):
+        return offset
+    if payload[offset : offset + 1] == b"\x00":
+        offset += 1
+    if offset + 2 > len(payload):
+        raise ValueError("missing PValue header")
+    return offset
+
+
 def _parse_get_var_substreamed_response(payload: bytes) -> bytes:
     """Extract the typed value from a GetVarSubStreamed response payload."""
     from .error import S7ConnectionError
@@ -359,13 +371,11 @@ def _parse_get_var_substreamed_response(payload: bytes) -> bytes:
         if return_value != 0:
             raise S7ConnectionError(f"GetVarSubStreamed failed: return_value=0x{return_value:X}")
 
-        offset = consumed
-        if offset >= len(payload):
-            raise ValueError("missing response marker")
-        offset += 1  # protocol-defined unknown byte
-
-        if offset + 2 > len(payload):
-            raise ValueError("missing PValue header")
+        offset = _response_pvalue_offset(
+            payload,
+            consumed,
+            lambda flags, datatype: datatype == DataType.BLOB or (datatype == DataType.USINT and bool(flags & 0x10)),
+        )
         flags = payload[offset]
         datatype = payload[offset + 1]
         offset += 2
@@ -397,12 +407,11 @@ def _parse_protection_level_response(payload: bytes) -> int:
         if return_value != 0:
             raise S7ConnectionError(f"GetVarSubStreamed for the protection level failed: return_value={return_value}")
 
-        if offset >= len(payload):
-            raise ValueError("missing response marker")
-        offset += 1  # protocol-defined unknown byte
-
-        if offset + 2 > len(payload):
-            raise ValueError("missing PValue header")
+        offset = _response_pvalue_offset(
+            payload,
+            offset,
+            lambda flags, datatype: datatype == DataType.UDINT and not flags & 0x10,
+        )
         flags = payload[offset]
         datatype = payload[offset + 1]
         offset += 2
@@ -519,7 +528,10 @@ class S7CommPlusConnection:
         self,
         host: str,
         port: int = 102,
+        *,
+        legacy_s7_1500: bool = False,
     ):
+        self._legacy_s7_1500 = legacy_s7_1500
         self.host = host
         self.port = port
 
@@ -626,6 +638,11 @@ class S7CommPlusConnection:
         return self._session_setup_ok
 
     @property
+    def legacy_s7_1500(self) -> bool:
+        """Whether the opt-in profile is active on a SessionKey connection."""
+        return self._legacy_s7_1500 and self._session_key is not None
+
+    @property
     def requires_substreamed(self) -> bool:
         """Whether data operations must use substreamed function codes.
 
@@ -678,6 +695,8 @@ class S7CommPlusConnection:
                 SessionKey renewals. Defaults to 25 minutes; pass ``None`` to
                 disable automatic renewal.
         """
+        if self._legacy_s7_1500 and use_tls:
+            raise ValueError("legacy_s7_1500 requires use_tls=False")
         if legacy_session_key_refresh_interval is not None and legacy_session_key_refresh_interval <= 0:
             raise ValueError("legacy_session_key_refresh_interval must be positive or None")
         self._session_key_refresh_interval = legacy_session_key_refresh_interval
@@ -1202,12 +1221,7 @@ class S7CommPlusConnection:
                 raise S7ConnectionError("Response too short")
             _validate_response_header(data, function_code, seq_num)
             logger.debug(f"  Reassembled response ({len(data)} bytes), payload {len(data) - 10} bytes")
-            resp_payload = bytes(data[10:])
-            if self._session_key is not None:
-                resp_iid, iid_consumed = decode_uint32_vlq(resp_payload, 0)
-                logger.debug(f"  Response IntegrityId: {resp_iid} ({iid_consumed} bytes)")
-                resp_payload = resp_payload[iid_consumed:]
-            return resp_payload
+            return self._response_payload(function_code, bytes(data[10:]))
 
         logger.debug(f"=== RECV RESPONSE === raw frame ({len(response_frame)} bytes): {response_frame.hex(' ')}")
 
@@ -1253,14 +1267,7 @@ class S7CommPlusConnection:
         # NO SessionId field (requests do, making their header 14 bytes).
         resp_offset = 10
 
-        resp_payload = response[resp_offset:]
-
-        # SessionKey/HMAC responses prepend an IntegrityId VLQ. Ordinary
-        # TLS/V2 responses follow the standard application-payload layout.
-        if self._session_key is not None and len(resp_payload) > 1:
-            resp_iid, iid_consumed = decode_uint32_vlq(resp_payload, 0)
-            logger.debug(f"  Response IntegrityId: {resp_iid} ({iid_consumed} bytes)")
-            resp_payload = resp_payload[iid_consumed:]
+        resp_payload = self._response_payload(function_code, response[resp_offset:])
 
         logger.debug(f"  Response payload ({len(resp_payload)} bytes): {resp_payload.hex(' ')}")
 
@@ -1270,6 +1277,16 @@ class S7CommPlusConnection:
             logger.debug(f"  Trailer ({len(trailer)} bytes): {trailer.hex(' ')}")
 
         return resp_payload
+
+    def _response_payload(self, function_code: int, payload: bytes) -> bytes:
+        """Preserve legacy return values where IntegrityId follows the body."""
+        if self.legacy_s7_1500 and function_code in (FunctionCode.GET_MULTI_VARIABLES, FunctionCode.EXPLORE):
+            return payload
+        if self._session_key is not None and len(payload) > 1:
+            resp_iid, consumed = decode_uint32_vlq(payload, 0)
+            logger.debug("  Response IntegrityId: %d (%d bytes)", resp_iid, consumed)
+            return payload[consumed:]
+        return payload
 
     def _verified_incoming_data(self, frame: bytes) -> bytes:
         """Return application data after authenticating the complete frame."""
@@ -1388,6 +1405,9 @@ class S7CommPlusConnection:
         data = bytearray()
         fragments = 0
         expected_version: int | None = None
+        from ._fragment_hmac import FragmentHMACVerifier
+
+        legacy_verifier = FragmentHMACVerifier(self._session_key) if self.legacy_s7_1500 and self._session_key else None
         digest_state = hmac.new(self._session_key[:24], digestmod=hashlib.sha256) if self._session_key is not None else None
         while True:
             ensure(4)
@@ -1424,7 +1444,11 @@ class S7CommPlusConnection:
                 if digest_state is None:
                     raise S7ConnectionError("V3 response received without a session key")
                 try:
-                    fragment_data = _verify_v3_hmac(fragment_data, digest_state)
+                    fragment_data = (
+                        legacy_verifier.verify(fragment_data)
+                        if legacy_verifier is not None
+                        else _verify_v3_hmac(fragment_data, digest_state)
+                    )
                 except S7IntegrityError:
                     self._invalidate_integrity_failure()
                     raise
