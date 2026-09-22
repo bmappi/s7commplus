@@ -51,6 +51,30 @@ attributes in the CreateObject response and fails immediately instead of
 returning a misleading connected client. Password legitimation over a
 supported TLS session remains available through ``AsyncClient.authenticate``.
 
+Legacy S7-1500 firmware 2.6
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An S7-1512SP on firmware 2.6 has been observed to use different authenticated
+fragment digests, symbolic-read qualifiers, and EXPLORE response layouts.
+For that non-TLS, synchronous path, opt in explicitly:
+
+.. code-block:: python
+
+   from s7commplus import Client
+
+   with Client() as client:
+       client.connect("192.0.2.1", use_tls=False, legacy_s7_1500=True)
+       tags = client.browse()
+       tag = next(tag for tag in tags if tag["name"] == "Example.Value")
+       address = [int(part, 16) for part in tag["access_sequence"].split(".")]
+       raw = client.read_symbolic(address[0], address[1:])
+
+The setting defaults to ``False`` and is retained across reconnects. It is
+incompatible with TLS. It changes synchronous browse and symbolic reads after
+SessionKey authentication; writes, alarms, subscriptions, raw DB access, and
+other firmware have not been hardware validated with this profile. The
+``AsyncClient`` does not support legacy SessionKey authentication.
+
 TLS
 ---
 
