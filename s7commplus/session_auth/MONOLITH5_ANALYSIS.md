@@ -123,6 +123,77 @@ also does not determine A and B separately, so it cannot replace the exact
 setup merge or its carry correction. Earlier Monolith3/4/6 encoded-span
 identities still need source-derived proofs on their valid encoding domain.
 
+## Binary normalization and Monolith4 carry investigation
+
+The recovered decoder admits a further exact normalization, checked directly
+from all 169 coefficients in `tools/recover_monolith4_span_identity.py`.
+Its boundary gate h has weight H=(p+1)/2. Each of its other 168 gates has a
+distinct weight +2^k or -2^k, k=0..167. Complement every negative-weight gate
+to obtain an ordinary unsigned binary payload B. If n is the sum of the
+negative weights, D=n+B+H*h and the recovered constant C is exactly -3*n.
+Consequently the candidate field shadow is V=B+H*h modulo p, with no fitted
+offset. These normalization statements are exact integer algebra, before any
+modular reduction.
+
+Substituting this into the already recovered exact Monolith5 identity gives:
+
+```text
+A+B = B0+B1+B2 + H*parity(h0,h1,h2) + majority(h0,h1,h2) (mod 2^168)
+```
+
+This uses 2H=p+1, so H*sum(h)-p*majority(h) becomes
+H*parity(h)+majority(h). It is an exact reformulation of the symbolic model,
+not interpolation. It still does not recover the two streams separately.
+
+For Monolith4, the resulting full-addition **candidate** is:
+
+```text
+T = B0+B1+(h0 & h1)
+B_out = T mod 2^168
+h_out = h0 XOR h1
+overflow = T >= 2^168
+V(out)-V(in0)-V(in1) = -12032*overflow (mod p)
+```
+
+The last equation follows algebraically from the candidate: the boundary
+contributes -p*(h0 & h1), which vanishes modulo p, while a discarded carry
+contributes -2^168, congruent to -12032. All 1,000 seeded arbitrary raw-span
+tests match the complete candidate and both overflow branches. Thus it explains
+the previous negative control, but sampling does not prove all 168 output bits.
+
+The tool separately proves h_out and the first **eight** B_out bits for every
+uint32 source using canonical ROBDD equality against ripple-addition diagrams.
+It interprets only demanded bits from versioned source slices, preserving
+assignment versions, masks, fixed shifts, complements, and uint32 truncation.
+The eight-bit proof peaks at 157,895 decision nodes. Wider attempts exceed the
+existing two-million-node bound; integer polynomial expansion also grows too
+large. Neither attempt is represented as a completed full-addition proof.
+Further solver-backed verification would require an additional development
+dependency. The approved development-only `analysis` extra supplies Z3 without
+changing runtime dependencies. `tools/prove_monolith4_span_identity.py` first
+checks an independent fixed-width AST translation and its demanded Boolean
+translation against eight generated-code controls. It then checks each decoded
+output bit incrementally, retaining only equalities already proved for all
+source assignments as lemmas. Reports include source/model SHA-256 hashes,
+solver version, completed query count, and timeout/unknown or counterexample
+status. An unknown result exits unsuccessfully; it is never treated as proof.
+
+With Z3 4.16.0 and a 60-second solver budget, the full attempt established the
+boundary bit and first 25 payload bits, then returned unknown/timeout on the
+next query. This extends the bounded source proof, but **does not establish the
+remaining 143 payload bits**. The runtime is unchanged.
+
+```bash
+python -m tools.recover_monolith4_span_identity
+python -m pip install '.[analysis]'
+python -m tools.prove_monolith4_span_identity --payload-bits 25
+python -m tools.prove_monolith4_span_identity --timeout-ms 60000
+```
+
+Remaining work: prove the full Monolith4 candidate, derive corresponding
+Monolith3/6 equations, and establish encoding bounds through the whole setup.
+A bounded prefix proof alone does not justify a runtime rewrite.
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:
