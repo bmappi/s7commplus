@@ -108,10 +108,15 @@ Pointer = tuple[str, int]
 def _pointer(node: ast.expr) -> Pointer:
     if isinstance(node, ast.Name) and node.id in {"wv", "cv", "data"}:
         return node.id, 0
-    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice) and node.slice.upper is None:
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Slice)
+        and node.slice.upper is None
+        and node.slice.step is None
+    ):
         bank, offset = _pointer(node.value)
         lower = node.slice.lower
-        if isinstance(lower, ast.Constant) and isinstance(lower.value, int):
+        if isinstance(lower, ast.Constant) and type(lower.value) is int:
             return bank, offset + lower.value
     raise ValueError("unsupported setup pointer")
 

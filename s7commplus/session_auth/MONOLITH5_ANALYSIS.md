@@ -543,6 +543,102 @@ or recover any nonzero correction predicates from legal setup inputs, while
 preserving the final merge's representative-sensitive carry behavior. Runtime
 and generated code remain unchanged.
 
+## Reachable encoded setup ranges and the exact slot-94 identity
+
+`tools/prove_transform7_setup_ranges.py` specializes the generated-source bit
+DAGs through the actual setup call graph. Its inputs are arbitrary 160-bit
+X, Y, and R, with setup's forced bits applied to Y/R. The initializer and
+RotateRight30 statements must match explicit AST templates. It snapshots
+wrapper reads before writes, rejects unsupported statements/signatures,
+unexpected context reallocations, and strided pointers, and validates merge
+operands with the earlier composition tool. Merged context bytes are modeled
+as fresh unconstrained bits because no later setup wrapper reads them; they are
+not silently reused as their premerge values.
+
+A decoded payload bound is **not** sufficient provenance. Toggling word 17 bit
+9 in the bundled encoded-zero span leaves both input decoded spans unchanged
+and below 2^160, but changes the first Monolith3 wrapper's wrap from zero to
+one. This strengthens the earlier arbitrary-raw-source witness: even the
+correct decoded range cannot exclude the extra high-bit correction. The new
+proof therefore expands the actual preceding encoded calls rather than
+assuming arbitrary encodings with a small decoded payload are valid.
+
+The range argument combines generated-source SAT queries with integer
+consequences of the pinned, complete Monolith3/4/6 kernel proofs:
+
+- For each Monolith3/6 pair, prove its two normalized payload top bits are zero.
+  Established input bounds make the local carry r167 zero, so the proved
+  column theorem gives m=top_count-r167=0. Monolith3's plain windows also
+  stay below 2^162, ruling out truncation and the virtual top bit.
+- With zero wrap, 2*(B0+B1)+h0+h1=T as **integers**. An upper bound on T
+  bounds the pair's sum. Keep this paired bound instead of accidentally
+  doubling it when both output spans are passed to a subsequent wrapper.
+- For Monolith4, derive the output bound from B0+B1+h0*h1 and the complete
+  decoded-addition theorem. These are labeled `derived`, not fabricated
+  UNSAT solver results; their maxima are below 2^168, so no overflow occurs.
+- For Monolith5, prove both packed streams are below 2^167. Their sum and
+  the bounded target T are then below 2^168; the exact packing congruence
+  becomes integer equality, so the packed-sum wrap is zero.
+
+Only proved queries and these justified integer consequences become later
+lemmas. Each SAT query retains facts for its actual call ancestors, not every
+earlier branch's unrelated carry network. An unknown/timeout yields no bound;
+dependent calls are explicitly skipped while independent branches continue.
+SSA bindings likewise retain only variables actually read by each assignment,
+avoiding the previous quadratic copying of all live variables per statement.
+
+Before solving, eight synthetic real setups replay the lazy raw high-bit
+snapshots, including otherwise undecoded high bits. The independent uint32
+compiler validates all supported generated statements and helper/prologue/
+writeback shapes, now including Monolith5. Dependency-free tests compare every
+raw output bit of Monolith3/4/5/6 against eight arbitrary generated executions
+each; optional solver tests separately replay Monolith5's fixed-width compiler.
+The complete Monolith3/6 proofs and Monolith4's checked prefix are preserved
+after the shared source-interpreter changes.
+
+`tools/transform7_setup_range_proof.json` records completed, timed-out, and
+dependency-skipped obligations, as well as kernel/data hashes and exact integer
+caps. It is a solver-run/proof-accounting record, not an independently checked
+certificate. The saved attempt has 16 UNSAT source queries, five integer
+deductions, two query timeouts (calls 10 and 14), and six dependency-skipped
+obligations. It proves zero wrap/truncation corrections for 15 of the 23 calls:
+0..9, 11..13, 21, and 22. The whole-setup range proof is still incomplete.
+However, all
+wrapper corrections contributing to context slot 46's **premerge residue**
+vanish for the modeled legal input domain, closing that part of the original
+affine candidate's proof gap. Its final merge still needs the exceptional
+carry correction: the earlier legal witness returning 94 instead of 2^128
+remains valid and unchanged.
+
+The independent slot-94 branch goes further. Its three source queries prove
+the plain range, Monolith3 pair top-bit bounds, and Monolith5 packed-stream
+bounds without any other setup branch's lemmas. The initializer/rotation makes
+N=4*X, and both encoded inputs have B=h=0. Therefore:
+
+    T3 = N/2 = 2*X
+    2*(B0+B1) + h0+h1 = 2*X
+    h0+h1 <= 1  =>  h0=h1=0 and B0+B1=X
+    T5 = X  =>  A+B=X as integers
+
+Since 0<=A,B<=X<2^160, Prepare is the identity on each stream, their sum
+cannot produce an overflow or lost carry, and the final merged slot 94 is
+**exactly X as a 160-bit representative**, not merely X modulo p. This
+includes inputs X=p and X=p+1; reducing them to field residues would lose
+the now-proved representative identity. Tests preserve these noncanonical
+boundaries and independently replay the three fast source obligations.
+
+```bash
+python -m tools.prove_transform7_setup_ranges --timeout-ms 30000 --progress
+```
+
+The command exits nonzero while any obligation is unknown or dependency-skipped.
+Slot 94's exact identity does not establish equivalence for the remaining three
+merged context slots, the scalar dispatches, or the final encoded authentication
+output. Next: close the remaining Monolith6 reachability queries and their
+downstream dependencies, then recover the individual packed streams or legal
+input carry predicates needed to remove all runtime wrapper calls. No runtime
+or generated implementation has been replaced.
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:

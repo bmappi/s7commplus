@@ -16,13 +16,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from s7commplus.session_auth.family0._generated import monolith3, monolith4, monolith6
+from s7commplus.session_auth.family0._generated import monolith3, monolith4, monolith5, monolith6
 from tools.recover_monolith4_span_identity import input_gate_diagram, normalized_span, normalized_terms, output_gate_diagram
 from tools.recover_monolith5 import _literal
 
 
 def symbolic_source(number: int = 4) -> tuple[Any, list[Any], list[Any]]:
-    modules = {3: (monolith3, 42, 36), 4: (monolith4, 36, 18), 6: (monolith6, 54, 36)}
+    modules = {3: (monolith3, 42, 36), 4: (monolith4, 36, 18), 5: (monolith5, 54, 12), 6: (monolith6, 54, 36)}
     if number not in modules:
         raise ValueError("unsupported decoded-span monolith")
     module_source, source_count, destination_count = modules[number]

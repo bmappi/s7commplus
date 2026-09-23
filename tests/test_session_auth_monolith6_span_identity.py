@@ -105,7 +105,7 @@ def test_proof_rejects_limits_before_loading_z3(kwargs: dict[str, int]) -> None:
 
 def test_shared_source_compiler_rejects_invalid_monoliths_and_outputs_before_solver_load() -> None:
     with pytest.raises(ValueError, match="unsupported"):
-        symbolic_source(5)
+        symbolic_source(7)
     with pytest.raises(ValueError, match="positive"):
         boolean_backend(None, 0)
     term = normalized_terms()[0]

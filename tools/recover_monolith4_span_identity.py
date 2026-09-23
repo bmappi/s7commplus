@@ -54,9 +54,9 @@ def _gate(bdd: BDD, term: Term, bits: list[int]) -> int:
     raise ValueError("unsupported gate")
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=4)
 def _program(monolith: int = 4) -> list[tuple[str, ast.expr]]:
-    if monolith not in (3, 4, 6):
+    if monolith not in (3, 4, 5, 6):
         raise ValueError("unsupported decoded-span monolith")
     path = REPOSITORY_ROOT / f"s7commplus/session_auth/family0/_generated/monolith{monolith}.py"
     module = ast.parse(path.read_text(encoding="utf-8"))
@@ -73,8 +73,10 @@ def _program(monolith: int = 4) -> list[tuple[str, ast.expr]]:
     return statements
 
 
-def output_gate_diagram(term: Term, bdd: BDD, monolith: int = 4, span: int = 0) -> int:
-    if monolith not in (3, 4, 6) or not 0 <= span < (1 if monolith == 4 else 2):
+def output_bit_diagram(word: int, bit: int, bdd: BDD, monolith: int = 4) -> int:
+    """Interpret one generated output bit using the shared versioned AST DAG."""
+    counts = {3: 36, 4: 18, 5: 12, 6: 36}
+    if monolith not in counts or not 0 <= word < counts[monolith] or not 0 <= bit < 32:
         raise ValueError("unsupported decoded-span output")
     # One versioned evaluator per backend shares every demanded carry bit
     # across output words and decoder terms instead of rebuilding their DAGs.
@@ -84,8 +86,17 @@ def output_gate_diagram(term: Term, bdd: BDD, monolith: int = 4, span: int = 0) 
         statements = _program(monolith)
         bindings: list[dict[str, int]] = []
         latest: dict[str, int] = {}
-        for index, (name, _) in enumerate(statements):
-            bindings.append(dict(latest))
+        for index, (name, expression) in enumerate(statements):
+            # Capture only names read by this assignment. Copying every live
+            # SSA binding at every statement is quadratic and becomes costly
+            # when composing many wrapper invocations in one setup DAG.
+            bindings.append(
+                {
+                    node.id: latest[node.id]
+                    for node in ast.walk(expression)
+                    if isinstance(node, ast.Name) and node.id.startswith("uVar")
+                }
+            )
             latest[name] = index
 
         @lru_cache(maxsize=None)
@@ -145,11 +156,14 @@ def output_gate_diagram(term: Term, bdd: BDD, monolith: int = 4, span: int = 0) 
         bdd._monolith_evaluators[monolith] = evaluate, latest
     evaluate_bit, latest = bdd._monolith_evaluators[monolith]
     statements = _program(monolith)
-    bits = []
-    for member in range(3):
-        word = span * 18 + term.chunk * 3 + member
-        index = latest[f"dst_dwords[{word}]"]
-        bits.append(evaluate_bit(statements[index][1], term.bit, index))
+    index = latest[f"dst_dwords[{word}]"]
+    return evaluate_bit(statements[index][1], bit, index)
+
+
+def output_gate_diagram(term: Term, bdd: BDD, monolith: int = 4, span: int = 0) -> int:
+    if monolith not in (3, 4, 6) or not 0 <= span < (1 if monolith == 4 else 2):
+        raise ValueError("unsupported decoded-span output")
+    bits = [output_bit_diagram(span * 18 + term.chunk * 3 + member, term.bit, bdd, monolith) for member in range(3)]
     return _gate(bdd, term, bits)
 
 
