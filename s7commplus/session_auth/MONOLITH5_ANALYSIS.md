@@ -194,6 +194,59 @@ Remaining work: prove the full Monolith4 candidate, derive corresponding
 Monolith3/6 equations, and establish encoding bounds through the whole setup.
 A bounded prefix proof alone does not justify a runtime rewrite.
 
+## Carry-stage proof decomposition
+
+`tools/prove_monolith4_carry_stages.py` expresses the addition proof in terms
+of the actual decoded source functions, rather than growing ideal prefixes.
+Let xk and yk be the normalized input payload bits and sk the decoded output.
+Define ck = sk XOR xk XOR yk. The proof obligations are:
+
+```text
+h_out = h0 XOR h1
+c0 = h0 AND h1
+c(k+1) = majority(xk,yk,ck)        k=0..166
+```
+
+These 169 obligations imply all 168 payload sum bits by induction: sk is
+xk XOR yk XOR ck by definition. No carry equality is assumed to prove itself.
+The final overflow follows from the mathematical addition once this chain is
+complete. Eight deterministic controls compare both the independent fixed-width
+AST compiler and the demanded-bit compiler against generated output before any
+solver queries. Reports pin source/model hashes and solver version.
+
+With Z3 4.16.0, the dedicated stages [0,31) all returned UNSAT, establishing
+the boundary and a **30-bit payload prefix**. An isolated UNSAT proof of
+carry_29_to_30 then extends the established prefix to **31 bits by composition**.
+The isolated report correctly claims no prefix on its own: it does not include
+the base cases. The remaining 137 payload bits are unproved. Time budgets and
+proof frontiers can vary; an unknown does not refute the source identity.
+
+The experimental cone mode replaces nonlocal sub-DAGs with consistently shared,
+independent Boolean cut signals. Every concrete source assignment specializes
+those signals back to their original functions, so UNSAT proves a stronger
+equation and therefore the source equation. SAT may be spurious. Refinement
+expands cut definitions instead of inventing reachable-state constraints.
+Initial aggressive cuts prove the base cases but lose correlations required
+for later stages; widening them has not completed the full proof. An optional
+lemma-retaining solver mode uses only previously proved equalities and was
+slower in the tested run, so independent stage queries remain the default.
+
+Dependency-free tests exhaustively check cone specialization and refinement on
+small shared Boolean DAGs, including an original UNSAT expression whose
+generalization is SAT. They also guard constant preservation, induction gaps,
+partial-range completion, and invalid query limits. CLI failures and timeouts
+exit unsuccessfully, and a full proof requires every one of the 169 stages.
+
+```bash
+python -m tools.prove_monolith4_carry_stages --stop 31 --timeout-ms 10000
+python -m tools.prove_monolith4_carry_stages --start 31 --stop 32 --timeout-ms 30000
+python -m tools.prove_monolith4_carry_stages --abstract --stop 6
+```
+
+The next proof bottleneck is the transition into bit 31 and the later encoded
+carry boundaries. Neither these bounded proofs nor cone experiments authorize
+a runtime substitution. Runtime source and dependencies remain unchanged.
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:

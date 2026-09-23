@@ -119,26 +119,9 @@ def symbolic_source() -> tuple[Any, list[Any], list[Any]]:
     return z3, source, [destination[word] for word in range(18)]
 
 
-def prove(timeout_ms: int = 60000, payload_bits: int = 168) -> dict[str, Any]:
-    if timeout_ms <= 0:
-        raise ValueError("timeout must be positive")
-    if not 1 <= payload_bits <= 168:
-        raise ValueError("payload bits must be in 1..168")
-    z3, source, output = symbolic_source()
-    # Independent concrete translation controls before making a solver claim.
-    rng = random.Random(0x4A57)
-    for _ in range(8):
-        words = [rng.getrandbits(32) for _ in range(36)]
-        generated = bytearray(72)
-        monolith4.execute(generated, struct.pack("<36I", *words))
-        substitutions = [(variable, z3.BitVecVal(word, 32)) for variable, word in zip(source, words)]
-        evaluated = [z3.simplify(z3.substitute(value, *substitutions)).as_long() for value in output]
-        if struct.pack("<18I", *evaluated) != generated:
-            raise ValueError("symbolic source translation disagrees with generated code")
-    boundary, terms = normalized_terms()
+def boolean_backend(z3: Any) -> Any:
+    """Reusable demanded-bit backend for prefix and carry-stage proofs."""
 
-    # Demand-only Boolean translation avoids bitblasting unrelated word bits.
-    # The independent fixed-width translation above remains a concrete control.
     class Backend:
         def __init__(self) -> None:
             self.refs = [(word, bit) for word in range(36) for bit in range(32)]
@@ -165,7 +148,17 @@ def prove(timeout_ms: int = 60000, payload_bits: int = 168) -> dict[str, Any]:
                 return z3.Xor(left, right)
             raise ValueError("unsupported Boolean operation")
 
-    backend: Any = Backend()
+    return Backend()
+
+
+def prove(timeout_ms: int = 60000, payload_bits: int = 168) -> dict[str, Any]:
+    if timeout_ms <= 0:
+        raise ValueError("timeout must be positive")
+    if not 1 <= payload_bits <= 168:
+        raise ValueError("payload bits must be in 1..168")
+    z3, source, output = symbolic_source()
+    boundary, terms = normalized_terms()
+    backend = boolean_backend(z3)
     lb = input_gate_diagram(boundary, 0, backend)
     rb = input_gate_diagram(boundary, 1, backend)
     actual_boundary = output_gate_diagram(boundary, backend)
@@ -182,22 +175,7 @@ def prove(timeout_ms: int = 60000, payload_bits: int = 168) -> dict[str, Any]:
         mismatches.append(z3.Xor(actual, expected))
         actual_bits.append(actual)
         carry = z3.Or(z3.And(left, right), z3.And(left, carry), z3.And(right, carry))
-    packed_actual = z3.Concat(
-        *[z3.If(bit, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1)) for bit in (actual_boundary, *reversed(actual_bits))]
-    )
-    rng = random.Random(0x4A57)
-    for _ in range(8):
-        words = [rng.getrandbits(32) for _ in range(36)]
-        generated = bytearray(72)
-        monolith4.execute(generated, struct.pack("<36I", *words))
-        substitutions = [
-            (variable, z3.BoolVal(bool((words[word] >> bit) & 1)))
-            for (word, bit), variable in zip(backend.refs, backend.variables)
-        ]
-        payload, hb = normalized_span(struct.unpack("<18I", generated))
-        value = z3.simplify(z3.substitute(packed_actual, *substitutions)).as_long()
-        if value != (hb << payload_bits) | (payload & ((1 << payload_bits) - 1)):
-            raise ValueError("demanded-bit translation disagrees with generated code")
+    verify_translation(z3, source, output, backend, actual_boundary, actual_bits)
     solver = z3.SolverFor("QF_FD")
     # Incremental cuts: retain only equalities already proved UNSAT for all
     # source assignments. These are derived lemmas, not input assumptions.
@@ -245,6 +223,29 @@ def prove(timeout_ms: int = 60000, payload_bits: int = 168) -> dict[str, Any]:
             for word in range(36)
         ]
     return report
+
+
+def verify_translation(z3: Any, source: list[Any], output: list[Any], backend: Any, boundary_bit: Any, bits: list[Any]) -> int:
+    """Replay both independent symbolic compilers against generated uint32 output."""
+    packed = z3.Concat(*[z3.If(bit, z3.BitVecVal(1, 1), z3.BitVecVal(0, 1)) for bit in (boundary_bit, *reversed(bits))])
+    rng = random.Random(0x4A57)
+    for _ in range(8):
+        words = [rng.getrandbits(32) for _ in range(36)]
+        generated = bytearray(72)
+        monolith4.execute(generated, struct.pack("<36I", *words))
+        substitutions = [(variable, z3.BitVecVal(word, 32)) for variable, word in zip(source, words)]
+        evaluated = [z3.simplify(z3.substitute(value, *substitutions)).as_long() for value in output]
+        if struct.pack("<18I", *evaluated) != generated:
+            raise ValueError("fixed-width translation disagrees with generated code")
+        boolean_values = [
+            (variable, z3.BoolVal(bool((words[word] >> bit) & 1)))
+            for (word, bit), variable in zip(backend.refs, backend.variables)
+        ]
+        actual = z3.simplify(z3.substitute(packed, *boolean_values)).as_long()
+        payload, h = normalized_span(struct.unpack("<18I", generated))
+        if actual != (h << len(bits)) | (payload & ((1 << len(bits)) - 1)):
+            raise ValueError("demanded-bit translation disagrees with generated code")
+    return 8
 
 
 def main() -> None:
