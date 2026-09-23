@@ -177,6 +177,55 @@ on boundary/random inputs, and preserve the packed-runtime mismatch witness.
 The next task is recovering input/intermediate invariants or retaining exact
 corrections alongside the short mathematical structure.
 
+## Reachability through Transform7
+
+`tools/trace_transform7_tail.py` instruments the real Transform7 orchestration
+temporarily, without changing library source. It captures the context before
+dispatch 320/321 (stage 160) and after the last dispatch, validates all 249
+dispatch ranges, and checks the independent exact tail against the captured
+exit bytes. A second complete Transform7 run substitutes only the four compact
+shadow outputs before PrepareFinalize and the downstream monoliths, then
+compares the complete 72-byte destination.
+
+The sweep uses deterministic synthetic PRNG pairs, the seed generator's bundled
+base-point data, and bundled public keys `00:181B7B0847D11694` and
+`01:BD426B091F08731A`. No live secrets, PLC access, or new hardware capture are
+involved. The default report aggregates checks; `--details` includes per-case
+checks and hashes of synthetic destinations, not raw key material. The patching
+is single-threaded diagnostic instrumentation, not a runtime execution option.
+
+```bash
+python -m tools.trace_transform7_tail --random-cases 32
+```
+
+With seed `0x712`, all **111 cases** passed: three public sources, each with
+five structured PRNG pairs and 32 seeded random pairs. Every observed pair of
+tail-entry representatives was nonzero and below `p`. All exact-model tail
+bytes matched. No intermediate lost modular congruence; shadow outputs matched
+both residues and packed representatives, and substituting them left every
+complete Transform7 destination unchanged. The structured pairs cover zeros,
+one, all-one bits, the highest scalar bit, and alternating patterns.
+
+This is reachability **sampling**, not proof that all reachable inputs satisfy
+the needed invariants. In particular, the independently established `x=y=1`
+counterexample remains a reason not to switch the runtime to compact modular
+formulas. The next proof obligation is deriving constraints on the tail inputs
+and intermediate representatives from the first 160 dispatch stages.
+
+The downstream source also reveals an unused branch: slot 71 is normalized at
+offset `0x6A8`, then passed to the last Monolith7 call, which writes work-buffer
+regions `[0x4E0,0x528)` and `[0x498,0x4E0)`. Neither region is read again before
+Transform7 returns. The live final result uses slots **27, 61, and 97** instead.
+A negative-control test replaces slot 71 with zero: tail bytes differ, but the
+final destination does not. Replacing live slot 27 with zero changes the final
+destination, ensuring the instrumentation does not simply report success for
+every substitution. Removing this dead branch is a later cleanup decision;
+the runtime is unchanged. Slicing away slot 71 alone does not shorten the
+1989-equation tail slice, because its dependencies are shared with live outputs.
+
+Tests also verify scalar-bit dispatch selection and restoration of the patched
+dispatcher after both normal execution and exceptions.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
