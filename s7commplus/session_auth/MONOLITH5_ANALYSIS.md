@@ -90,6 +90,39 @@ python -m tools.recover_monolith5_gates --formula 0
 python -m tools.recover_monolith5_gates --verify tools/monolith5_gate_model.json
 ```
 
+## Exact additive span identity
+
+`tools/recover_monolith5_span_decoder.py` derives an additive interpretation of
+the two raw streams directly from the recovered position and named-gate models.
+Let A and B be their six-lane 168-bit payload integers, p = 2^160 - 47,
+and s0, s1, s2 the three eighteen-word input spans. Then:
+
+```text
+A + B = C + D(s0) + D(s1) + D(s2) - p * majority(b0,b1,b2) (mod 2^168)
+C = 51698806077986350461380052348415547004375582574557
+bi = choose(si.word0_bit0, si.word1_bit0, si.word2_bit0)
+```
+
+D is a reusable sum of 169 signed, weighted local choose/majority gates. The
+tool prints their complete coefficients with `python -m
+tools.recover_monolith5_span_decoder`. No interpolation or chosen-input fitting
+is used: integer truth-table transforms check every interior output pair;
+`xor3 + 2*majority = sum` cancels their interactions. The first-position identity
+`2*or3 - not_all_equal = sum - majority` leaves the explicit -p correction.
+Top-position XOR interactions vanish modulo 2^168.
+
+Tests check the known-answer vector, 1,000 seeded arbitrary-word inputs,
+structured and single-bit inputs, and all boundary configurations with span
+permutations against generated Monolith5. The derivation is exact relative to
+the existing symbolically recovered gate/position models, not merely a sampled
+identity.
+
+This is **not yet a field decoder**: reducing a 168-bit sum before reducing
+modulo p discards a multiple of 2^168, which is not zero modulo p. The identity
+also does not determine A and B separately, so it cannot replace the exact
+setup merge or its carry correction. Earlier Monolith3/4/6 encoded-span
+identities still need source-derived proofs on their valid encoding domain.
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:
