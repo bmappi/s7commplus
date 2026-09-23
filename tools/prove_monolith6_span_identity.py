@@ -16,32 +16,39 @@ import time
 from pathlib import Path
 from typing import Any
 
-from s7commplus.session_auth.family0._generated import monolith6
+from s7commplus.session_auth.family0._generated import monolith3, monolith6
 from tools.prove_monolith4_span_identity import boolean_backend, symbolic_source
 from tools.recover_monolith4_span_identity import input_gate_diagram, normalized_span, normalized_terms, output_gate_diagram
 from tools.recover_monolith5_span_decoder import P
 
 
-def symbolic_pair() -> tuple[Any, Any, list[Any], list[Any], list[list[Any]], list[list[Any]]]:
-    z3, source, output = symbolic_source(6)
-    backend = boolean_backend(z3, 54)
+def symbolic_pair(number: int = 6) -> tuple[Any, Any, list[Any], list[Any], list[list[Any]], list[list[Any]]]:
+    if number not in (3, 6):
+        raise ValueError("unsupported decoded-pair monolith")
+    module = monolith3 if number == 3 else monolith6
+    z3, source, output = symbolic_source(number)
+    backend = boolean_backend(z3, len(source))
     boundary, terms = normalized_terms()
-    inputs = [[] for _ in range(3)]
+    spans = 2 if number == 3 else 3
+    inputs = [[] for _ in range(spans)]
     outputs = [[] for _ in range(2)]
     for term in terms:
-        for span in range(3):
+        for span in range(spans):
             value = input_gate_diagram(term, span, backend)
             inputs[span].append(z3.Not(value) if term.weight < 0 else value)
         for span in range(2):
-            value = output_gate_diagram(term, backend, 6, span)
+            value = output_gate_diagram(term, backend, number, span)
             outputs[span].append(z3.Not(value) if term.weight < 0 else value)
-    ih = [input_gate_diagram(boundary, span, backend) for span in range(3)]
-    oh = [output_gate_diagram(boundary, backend, 6, span) for span in range(2)]
+    ih = [input_gate_diagram(boundary, span, backend) for span in range(spans)]
+    oh = [output_gate_diagram(boundary, backend, number, span) for span in range(2)]
+    if number == 3:
+        ih.append(backend.variables[backend.ref_index[36, 0]])
+        inputs.append([backend.variables[backend.ref_index[36 + (k + 1) // 32, (k + 1) % 32]] for k in range(168)])
     rng = random.Random(0x6A57)
     for _ in range(8):
         words = [rng.getrandbits(32) for _ in source]
         native = bytearray(144)
-        monolith6.execute(native, struct.pack("<54I", *words))
+        module.execute(native, struct.pack(f"<{len(source)}I", *words))
         expected = struct.unpack("<36I", native)
         word_bindings = [(variable, z3.BitVecVal(word, 32)) for variable, word in zip(source, words)]
         if [z3.simplify(z3.substitute(value, *word_bindings)).as_long() for value in output] != list(expected):
@@ -78,13 +85,13 @@ def equations() -> tuple[Any, list[tuple[str, Any]]]:
     return z3, stages
 
 
-def local_equations() -> tuple[Any, list[tuple[str, Any]]]:
+def local_equations(number: int = 6) -> tuple[Any, list[tuple[str, Any]]]:
     """Local carry candidates; no sampled equality is assumed by the solver.
 
     Four-bit arithmetic cannot alias an integer mismatch: each side of a
     column equality is bounded between -4 and 6, so differences are <16.
     """
-    z3, _, ih, oh, inputs, outputs = symbolic_pair()
+    z3, backend, ih, oh, inputs, outputs = symbolic_pair(number)
 
     def value(bit: Any) -> Any:
         return z3.If(bit, z3.BitVecVal(1, 4), z3.BitVecVal(0, 4))
@@ -111,6 +118,12 @@ def local_equations() -> tuple[Any, list[tuple[str, Any]]]:
         stages.append((f"column_{k}", left != right))
     top = sum(value(bits[167]) for bits in outputs)
     stages.append(("wrap_balance_bound", z3.Or(top + 1 < carries[167], top > carries[167] + 1)))
+    if number == 3:
+        # The individual output encodings may use the extra plain bits. The
+        # column identities already prove their cancellation through bit 166;
+        # prove cancellation in the remaining top-column count separately.
+        ignored = [(backend.variables[backend.ref_index[36 + k // 32, k % 32]], z3.BoolVal(False)) for k in range(170, 192)]
+        stages.append(("plain_high_bits_pair_invariant", top != z3.substitute(top, *ignored)))
     return z3, stages
 
 

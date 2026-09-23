@@ -62,6 +62,13 @@ def relation(source: bytes, destination: bytes) -> Relation:
         raise ValueError("expected 216 source bytes and 144 destination bytes")
     inputs = tuple(normalized_span(struct.unpack("<18I", source[i * 72 : (i + 1) * 72])) for i in range(3))
     outputs = tuple(normalized_span(struct.unpack("<18I", destination[i * 72 : (i + 1) * 72])) for i in range(2))
+    return normalized_relation(inputs, outputs)
+
+
+def normalized_relation(inputs: tuple[tuple[int, int], ...], outputs: tuple[tuple[int, int], ...]) -> Relation:
+    """Check a decoded three-to-two relation, including virtual input spans."""
+    if len(inputs) != 3 or len(outputs) != 2 or any(not 0 <= b < MODULUS or h not in (0, 1) for b, h in inputs + outputs):
+        raise ValueError("expected normalized three-input/two-output pairs")
     ih = sum(h for _, h in inputs)
     oh = sum(h for _, h in outputs)
     if oh > 1:

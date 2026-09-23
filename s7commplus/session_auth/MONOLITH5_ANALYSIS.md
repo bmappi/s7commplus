@@ -201,7 +201,8 @@ python -m tools.prove_monolith4_span_identity --payload-bits 25
 python -m tools.prove_monolith4_span_identity --timeout-ms 60000
 ```
 
-Remaining work: derive corresponding Monolith3/6 equations and establish
+The Monolith3/6 pair proofs below subsequently establish their corresponding
+decoded equations. Remaining work is to track extra high bits and establish
 encoding bounds through the whole setup. A decoded identity alone does not
 justify replacing encoded runtime words.
 
@@ -271,8 +272,9 @@ python -m tools.prove_monolith4_carry_stages --timeout-ms 30000 --progress
 python -m tools.prove_monolith4_carry_stages --abstract --stop 6
 ```
 
-The next source-proof targets are Monolith3/6 and the complete setup composition,
-including overflow and carry-sensitive packing. The completed Monolith4 proof
+The Monolith3/6 pair proofs below extend this to the other setup wrappers.
+Next is complete setup composition, including high bits, overflow, and
+carry-sensitive packing. The completed Monolith4 proof
 establishes only its decoded payload and boundary, not individual encoded output
 words or the safety of a whole-pipeline modular rewrite. Runtime source and
 dependencies remain unchanged.
@@ -364,12 +366,99 @@ python -m tools.recover_monolith6_span_identity
 python -m tools.prove_monolith6_span_identity --timeout-ms 10000 --progress
 ```
 
-Next: derive Monolith3's corresponding source equations, and track these extra
+Monolith3's corresponding proof is now complete below. Next: track these extra
 high bits or prove encoding bounds through the real setup call graph. The
 conditional affine setup composition still assumes the uncorrected halving
 relationship and does not incorporate these wraps. This pair proof does not
 recover the individual output split or justify a modular runtime substitution.
 Runtime code and dependencies remain unchanged.
+
+## Monolith3: a virtual plain-input span and corrected quarter input
+
+`tools/prove_monolith3_span_identity.py` shares Monolith6's local carry proof,
+but the third input is a **virtual span**, not a third decoded 72-byte buffer.
+Monolith3 receives two encoded spans followed by a 24-byte plain integer N.
+Let L=N mod 2^170, e=L bit 0, Q=L>>1, and d=L bit 169. The virtual span is:
+
+```text
+h_virtual = e
+B_virtual = Q mod M
+```
+
+With this substitution, all three-input carry equations from the Monolith6
+section hold for the generated Monolith3 source. Its two boundary gates are
+exclusive, and the normalized virtual-span wrap m' lies in {-1,0,1}. Restoring
+the extra bit of Q gives the full signed wrap m=m'-d, hence -2<=m<=1. Set
+a=majority(h0,h1,e), q=parity(h0,h1,e), and g=g0+g1. Then:
+
+```text
+T = B0+B1+Q+H*q+a
+U = 2*(O0+O1)+g
+U-T = M*m
+2*V_out_pair-V_in_pair-Q-H*e = M*m+p*(g-a)    (exact integers)
+2*D_out_pair-D_in_pair-Q-H*e = 2*n+M*m+p*(g-a)
+V_out_pair = H*V_in_pair+H^2*L+6016*m         (mod p)
+```
+
+Since 2H=p+1, Q+H*e is L/2 modulo p and H^2 is the inverse of four;
+no primality assumption is needed. If using the original 192-bit N rather than
+L, the exact residue equation is:
+
+```text
+V_out_pair = H*V_in_pair+H^2*N+6016*m-12032*(N>>170)   (mod p)
+```
+
+The final term comes from 2^170/4=2^168, which is 12032 modulo p.
+The real setup's plain inputs are five-word values in zero-initialized
+six-word buffers; `rotate_right_30` multiplies its value by four, so those plain
+inputs fit within 162 bits. This removes the plain truncation term there, but
+does not yet prove that encoded-span wrap corrections vanish in the whole setup.
+
+All **171 obligations returned UNSAT** with Z3 4.16.0: boundary exclusivity,
+initial column, 167 local columns, the normalized wrap bound, and cancellation
+of the upper 22 plain bits from the decoded pair sum. Total stage time was about
+4.47 seconds, with the slowest query about 0.039 seconds, excluding compilation
+and eight independent fixed-width/demanded-bit runtime controls. These queries
+allow all 42 source uint32 words to vary freely, including arbitrary upper
+plain bits. None of the sampled arithmetic identities is assumed as a lemma.
+
+The upper-bit cancellation proof is semantic, not an absence claim. Individual
+output encodings retain dependencies on those bits, so conservative source
+support does not establish they are unused. The column equations prove that
+they cancel in each pair count through payload bit 166 and in the boundary
+count; the final query proves the remaining top-column count is invariant when
+plain bits 170..191 are zeroed. Together these establish cancellation for the
+entire decoded pair shadow, not for the individual output words or split.
+
+`tools/monolith3_span_proof.json` pins source/model hashes, solver version,
+scope, timings, and completed obligations. It is a solver-run record, not an
+independently checked proof certificate. Dependency-free tests check its
+provenance/accounting, all 192 single-bit plain boundaries, all low-two-bit
+division choices, and exact integer columns/corrections against synthetic
+generated executions. The shared Monolith6 proof was replayed successfully
+after adding the virtual-span specialization.
+
+`tools/recover_monolith3_span_identity.py` checks 1,000 arbitrary raw sources;
+all corrected shadows match, with m=-2:126, m=-1:373, m=0:382, and m=1:119.
+Wrap measurement still uses actual output high bits: it is not an input-only
+replacement formula. An all-zero 168-byte source and one with word 17 bit 9 set
+have identical decoded encoded inputs and identical plain input, yet O0 grows
+by 2^167 while O1 is unchanged. Their output pair shadows differ by +6016 modulo
+p, with m moving from zero to one. As with Monolith6, the current input decoder
+does not determine the full pair shadow for arbitrary raw sources. This remains
+a synthetic kernel witness, not a hardware-failure claim.
+
+```bash
+python -m tools.recover_monolith3_span_identity
+python -m tools.prove_monolith3_span_identity --timeout-ms 10000 --progress
+```
+
+The decoded setup-wrapper identities are now source-derived: Monolith4's
+addition, Monolith3/6's corrected pair halving, and Monolith5's combined packing.
+Next: compose **all corrections**, including Monolith5's 2^168 wrap and the
+already derived carry-sensitive merge, through the real setup. Establishing
+input-only high-bit/encoding invariants is still required for a compact runtime
+rewrite. Runtime code and dependencies remain unchanged.
 
 ## Dependency neighborhoods
 
