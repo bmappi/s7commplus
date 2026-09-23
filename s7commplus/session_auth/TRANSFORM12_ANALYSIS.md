@@ -356,6 +356,81 @@ and forced-bit behavior, and preserve both the setup exception and its final
 Transform7 effect. The intended cleanup therefore needs exact compatibility
 handling, not just an affine setup followed by ordinary field arithmetic.
 
+## Source-derived setup merge correction
+
+`tools/transform7_setup_merge.py` removes interpolation from the final merge
+step. Its domain is precisely six 28-bit payload lanes shifted left by two,
+including all 28 payload bits of the sixth lane. The recovered Monolith5 model
+establishes this output packing. Such a stream represents an integer
+`N < 2^168`, not necessarily a canonical 160-bit operand. The model rejects
+other packing rather than extending the equations to arbitrary Prepare inputs.
+
+Substitution of these lane expressions into Prepare gives the following exact
+closed form, with `L=2^160`, `p=L-47`, and `h=N>>160`:
+
+```text
+v = (N mod L) + 47*h
+P(N) = v             if v < L
+       v - L + 47    otherwise
+```
+
+The initial word assembly has disjoint bit segments, so its carries vanish.
+Only the final addition of `47*h` can carry through the five assembled words.
+Since `0 <= h <= 255`, any overflow leaves `v-L <= 11984`; the final low-word
+addition of 47 therefore cannot overflow uint32. This establishes the formula
+and `0 <= P(N) < L` for every stream in this packing domain. It also establishes
+`P(N) ≡ N (mod p)` without requiring primality. Representatives in `[p,L)`
+are still possible and must not be silently canonicalized for byte equivalence.
+
+For two streams `A` and `B`, set `S=P(A)+P(B)` and `W=2^128`. The exact final
+setup-addition representative is:
+
+```text
+E = (S >= L) AND ((S mod W) >= W-47)
+T = S                         if S < L
+    S - L + 47                if S >= L and not E
+    S - L + 47 + 94 - W       if E
+```
+
+This is derived from the original four-word carry propagation, not fitted from
+examples. In the exceptional branch write `S mod W = W-47+m`, where
+`0 <= m <= 46`. Adding 47 produces low four words equal to `m` and a carry
+past their 128-bit boundary. The original code discards that carry rather than
+incrementing the fifth word, and adds 94 to the low word. Since `m+94 <= 140`,
+this extra addition cannot carry. Relative to the ordinary overflow fold,
+the difference is therefore exactly `94-W`, independently of the fifth word.
+The nonexceptional cases retain the ordinary fold unchanged. In every case,
+`0 <= T < L` and:
+
+```text
+T ≡ A + B + (94-W)*E (mod p)
+```
+
+The affine setup map remains a candidate for `(A+B) mod p`; this derivation
+does **not** symbolically establish that relationship to the earlier monolith
+chains. It isolates a complete exact correction once the two streams are
+known. The real bundled-base-point witness has
+`S=L+W-47`, `E=true`, ideal residue `W`, and exact result `94`.
+
+The predicate cannot in general be inferred from the modular sum alone. For
+example, streams `(W,0)` have ideal residue `W` and exact result `W`, whereas
+streams `(L-1,W-46)` have the same ideal residue and exact result `94`.
+Recovering just the affine residues loses the information required to choose
+the exact representative and exceptional branch.
+
+```bash
+python -m tools.transform7_setup_merge
+```
+
+The command captures and verifies all four real setup additions for the
+synthetic bundled-base-point witness. Tests cover all 256 possible high bytes
+at fold boundaries, all 47 exceptional low-128-bit remainders and neighboring
+thresholds with multiple fifth-word values, 2000 seeded 168-bit operand pairs,
+and fresh full setup captures. They compare exact packed output bytes and the
+derived residue correction, including representatives above `p`. This is a
+source/algebra derivation supported by tests, not a solver-generated formal
+verification of the complete authentication code. The runtime is unchanged.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
