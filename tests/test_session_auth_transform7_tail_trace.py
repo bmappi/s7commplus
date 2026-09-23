@@ -40,6 +40,7 @@ def test_reachable_tail_matches_models_and_full_destination(case: trace.Case) ->
     assert result["entry_below_p"]
     assert result["entry_nonzero"]
     assert result["exact_model_matches"]
+    assert result["phase1_model_matches"]
     assert result["shadow_residue_mismatch_slots"] == []
     assert result["shadow_packed_mismatch_slots"] == []
     assert result["first_divergence_value"] is None

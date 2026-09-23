@@ -20,6 +20,7 @@ from s7commplus.session_auth.family0._generated.data import TRANSFORM7_DATA
 from s7commplus.session_auth.family0._generated.data._constants import TRANSFORM7_COUNTS_INTS, TRANSFORM7_INDEXES_INTS
 from tools import transform12_integer_model as exact
 from tools.decompile_transform12 import phase2_program, trace_outputs
+from tools.recover_transform12_phase1 import INITIAL_SLOTS, execute_state
 from tools.recover_transform12_formulas import FINAL_SLOTS, compact_outputs, first_divergence
 
 
@@ -37,6 +38,7 @@ class Observation:
     exit: bytes
     destination: bytes
     dispatches: tuple[int, ...]
+    phase1_entry: bytes
 
 
 def observe(case: Case, inject_shadow: bool = False) -> Observation:
@@ -45,11 +47,12 @@ def observe(case: Case, inject_shadow: bool = False) -> Observation:
         raise ValueError("synthetic case requires two 20-byte PRNG buffers and at least 40 source bytes")
     original = transform12.execute
     entry = b""
+    phase1_entry = b""
     exit_context = b""
     dispatches: list[int] = []
 
     def traced(context: bytearray, index: int, count: int) -> None:
-        nonlocal entry, exit_context
+        nonlocal entry, exit_context, phase1_entry
         stage = len(dispatches)
         if stage >= 249:
             raise ValueError("unexpected extra Transform12 dispatch")
@@ -60,6 +63,8 @@ def observe(case: Case, inject_shadow: bool = False) -> Observation:
         if len(matches) != 1:
             raise ValueError("Transform7 dispatch does not match the expected stage")
         dispatches.append(matches[0])
+        if stage == 0:
+            phase1_entry = bytes(context)
         if stage == 160:
             entry = bytes(context)
         original(context, index, count)
@@ -75,7 +80,7 @@ def observe(case: Case, inject_shadow: bool = False) -> Observation:
         transform7.execute(destination, bytearray(case.prng1), bytearray(case.prng2), case.source)
     if len(dispatches) != 249 or not entry or not exit_context:
         raise ValueError("Transform7 did not execute the complete expected trace")
-    return Observation(entry, exit_context, bytes(destination), tuple(dispatches))
+    return Observation(entry, exit_context, bytes(destination), tuple(dispatches), phase1_entry)
 
 
 def cases(random_cases: int = 8, seed: int = 0x712) -> list[Case]:
@@ -105,6 +110,13 @@ def analyze(case: Case) -> dict[str, object]:
     """Compare independent exact arithmetic, modular residues, bytes, and final output."""
     observed = observe(case)
     x, y = (exact.decode(observed.entry[slot * 24 : (slot + 1) * 24]) for slot in (5, 87))
+    initial = tuple(exact.decode(observed.phase1_entry[slot * 24 : (slot + 1) * 24]) for slot in INITIAL_SLOTS)
+    phase1_matches = execute_state((initial[0], initial[1], initial[2], initial[3]), int.from_bytes(case.prng2, "little")) == (
+        x,
+        y,
+    )
+    if not phase1_matches:
+        raise AssertionError(f"independent first-phase recurrence disagrees for synthetic case {case.name}")
     independent = bytearray(observed.entry)
     exact.execute_program(trace_outputs(phase2_program(), list(FINAL_SLOTS)), independent)
     runtime = {slot: exact.decode(observed.exit[slot * 24 : (slot + 1) * 24]) for slot in FINAL_SLOTS}
@@ -118,6 +130,7 @@ def analyze(case: Case) -> dict[str, object]:
     injected = observe(case, inject_shadow=True)
     return {
         "case": case.name,
+        "phase1_model_matches": phase1_matches,
         "entry_below_p": x < exact.CANDIDATE_MODULUS and y < exact.CANDIDATE_MODULUS,
         "entry_nonzero": x != 0 and y != 0,
         "exact_model_matches": exact_matches,
@@ -138,6 +151,7 @@ def summarize(results: list[dict[str, object]]) -> dict[str, object]:
         "entry_below_p": sum(bool(result["entry_below_p"]) for result in results),
         "entry_nonzero": sum(bool(result["entry_nonzero"]) for result in results),
         "exact_model_matches": sum(bool(result["exact_model_matches"]) for result in results),
+        "phase1_model_matches": sum(bool(result["phase1_model_matches"]) for result in results),
         "shadow_residue_mismatch_cases": [result["case"] for result in results if result["shadow_residue_mismatch_slots"]],
         "shadow_packed_mismatch_cases": [result["case"] for result in results if result["shadow_packed_mismatch_slots"]],
         "internal_divergence_cases": [result["case"] for result in results if result["first_divergence_value"] is not None],

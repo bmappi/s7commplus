@@ -226,6 +226,59 @@ the runtime is unchanged. Slicing away slot 71 alone does not shorten the
 Tests also verify scalar-bit dispatch selection and restoration of the patched
 dispatcher after both normal execution and exceptions.
 
+## Exact first-phase live-state recurrence
+
+`tools/recover_transform12_phase1.py` works backward from tail-entry slots
+5 and 87 through all 160 first-phase stages. At each boundary it slices **both**
+alternatives and propagates the union of their required entry slots. This is
+structural SSA dependency analysis, not sampled branch coverage or algebraic
+simplification; it preserves every scalar choice and keeps any shared input
+needed by either next-stage alternative.
+
+The recovered initial state is exactly slots **46, 48, 70, and 94**. Every
+subsequent input boundary has five live slots: four changing representatives
+plus slot 94. No instruction in any of the original 320 first-phase alternatives
+writes slot 94, so its preservation is a code-level invariant independent of
+the selected scalar. The last stage produces only the two required tail inputs.
+The first stage therefore maps three changing values plus one fixed value to
+four changing values plus that fixed value; the intermediate stage layouts
+vary, and are recorded explicitly rather than assumed interchangeable.
+
+In Transform7, the initial live slots correspond to context byte offsets
+`0x450`, `0x480`, `0x690`, and `0x8D0`. They are written by the setup monolith
+chains and BigIntAddition before the first dispatch. The recurrence's scalar
+selector is the unsigned little-endian integer in `prng2`, consumed from bit
+159 down to bit 0. It does not replace or dismiss the setup's dependence on
+`prng1` or the public source data.
+
+The checkout-only `execute_state(initial, scalar)` independently evaluates
+this recurrence using integer compatibility equations. It retains at most
+five live boundary representatives, without the 149-slot context or packed
+Prepare/Finalize calls. Within each stage it still evaluates live temporary
+SSA values. Across both alternatives, slicing retains 56,497 of the original
+56,858 instructions; only 361 are excluded. This is a state-space reduction,
+not a claim that the remaining arithmetic has collapsed into short formulas.
+
+```bash
+python -m tools.recover_transform12_phase1
+python -m tools.recover_transform12_phase1 --stage 159 --branch 0
+```
+
+Tests compare every one of the 320 branch exits with the original packed tape
+interpreter, check the boundary layouts and unmodified slot 94, and compare
+13 complete scalar paths while filling ignored initial slots with unrelated
+values. The Transform7 tracer now captures the context before the first
+dispatch as well, so it checks the recurrence against the tail entry actually
+produced by the real setup and selected path.
+
+The repeated 111-case sweep also matched this independent first-phase model.
+Nevertheless, these structural invariants alone do **not** establish nonzero
+tail inputs, inputs below `p`, or congruence-preserving intermediate ranges.
+The model accepts all canonically packed 160-bit representatives, including
+those above `p`; it intentionally preserves compatibility corrections. The
+remaining semantic problem is deriving constraints on the four setup values
+and their evolving recurrence, now without unrelated scratch slots.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
