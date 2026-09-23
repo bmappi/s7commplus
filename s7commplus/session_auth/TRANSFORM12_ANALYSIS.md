@@ -431,6 +431,59 @@ derived residue correction, including representatives above `p`. This is a
 source/algebra derivation supported by tests, not a solver-generated formal
 verification of the complete authentication code. The runtime is unchanged.
 
+## Conditional setup composition from source
+
+`tools/trace_transform7_setup_shadows.py` applies a candidate span shadow V:
+the **signed** weighted gate sum from Monolith5, plus C/3, reduced modulo p.
+This is deliberately not the 168-bit decoder reduced again modulo p.
+For setup-produced encodings, the observed wrapper identities are:
+
+```text
+Monolith3: V(out0)+V(out1) = (V(in0)+V(in1))/2 + plain(in2)/4
+Monolith4: V(out) = V(in0)+V(in1)
+Monolith6: V(out0)+V(out1) = (V(in0)+V(in1)+V(in2))/2
+Monolith5: rawA+rawB = V(in0)+V(in1)+V(in2) (mod p)
+```
+
+All divisions here mean inverses of units modulo p; no primality assumption is
+needed. `plain` reads the first 24 bytes as an unsigned little-endian integer.
+Tests observe all 23 setup wrappers on 132 deterministic structured/random
+cases, including the bundled-base-point carry witness: 3,036 comparisons match.
+These are **sampled hypotheses, not symbolic wrapper proofs**. A negative
+control shows the Monolith4 identity fails for arbitrary raw input spans, so a
+proof needs the valid-encoding domain, not just unconstrained input words.
+The preserved counterexample differs by -2^168 modulo p (that is, -12032),
+making the distinction between the two moduli concrete.
+
+The tool separately walks the actual Transform7 setup call AST and composes
+these hypotheses using exact rational coefficients. Each output pair retains
+an independent unknown split variable; none survives the four setup exits.
+The resulting equations, conditional on the wrapper identities and the plain
+input initialization/rotation semantics, are:
+
+```text
+ideal46 = d/4     + X/4  + Y/2  + R/8
+ideal48 = 23*d/32 + 3X/32 + 5Y/16 + 15R/64
+ideal70 = 7*d/8   + X/8  + Y/4  + 3R/16
+ideal94 = X
+```
+
+V(data[0:72]) is zero and d = V(data[72:144]) is
+479351431067838523670377406553314858552643643568. The derived offsets and
+matrix exactly match the independently interpolated candidate, without using
+recovery probes to obtain them. X is the first source integer; Y and R include
+the setup's forced bit 2. The final RotateRight30 gives plain(in2)=4X.
+
+This advances the candidate from a fitted map to a **conditional source
+composition**, not a proof of the entire setup. Individual pair members are
+not assumed affine. The two-stream merge and its exact carry correction still
+apply: all wrapper checks pass on the known witness even though its ideal46
+is 2^128 and its compatibility result is 94. Runtime code is unchanged.
+
+```bash
+python -m tools.trace_transform7_setup_shadows
+```
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
