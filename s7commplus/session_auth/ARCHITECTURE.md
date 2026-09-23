@@ -213,6 +213,12 @@ exact two-kernel form for all five output words. See
 [`MONOLITH11_ANALYSIS.md`](MONOLITH11_ANALYSIS.md) for the formula, proof
 boundary, and reproduction commands. The generated runtime code is unchanged.
 
+For Monolith5, fixed shifts make the bitwise-only method inapplicable. A
+symbolic ROBDD/ANF recovery yields an exact, compact analysis-only model with
+32 nine-input lane functions and a two-stream combination formula. See
+[`MONOLITH5_ANALYSIS.md`](MONOLITH5_ANALYSIS.md) for the formula, proof boundary,
+and reproduction command. The generated runtime code is unchanged.
+
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
 `RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
