@@ -123,8 +123,10 @@ session_auth/
 The `_generated/` modules are transpiled from HarpoS7's C# via
 `tools/transpile_harpo_monolith.py`. Each `monolithN.execute(dst, src)` is a
 straight-line uint32 arithmetic function verified byte-for-byte against upstream
-test vectors. They implement a proprietary permutation cipher and cannot be
-meaningfully simplified — the algorithm is designed to resist analysis.
+test vectors. These proprietary transforms are intentionally opaque, so any
+simplification needs evidence and equivalence checks. Monolith11 is a concrete
+exception: exhaustive bitwise analysis recovers a compact form below without
+changing the generated implementation.
 
 ## Artifact provenance and verification
 
