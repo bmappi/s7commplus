@@ -219,8 +219,8 @@ symbolic ROBDD/ANF recovery yields an exact, compact analysis-only model with
 [`MONOLITH5_ANALYSIS.md`](MONOLITH5_ANALYSIS.md) for the formula, proof boundary,
 and reproduction command. The generated runtime code is unchanged.
 
-The same per-bit symbolic approach also recovers an exact, analysis-only model
-for Monolith7 output words 15–17. See
+The same per-bit symbolic approach also recovers exact, analysis-only models
+for Monolith7 output words 3–5 and 15–17. See
 [`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for the deliberately partial
 scope and verification command. The other Monolith7 outputs are not replaced
 or claimed to be simplified.
