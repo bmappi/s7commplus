@@ -171,6 +171,26 @@ above separately verifies the exact bytes of each checked-in output. The
 Monolith9 and Monolith10 wrappers are human-maintained orchestration and are
 covered by their existing vector tests.
 
+For a read-only map of which 32-bit source, destination, and scratch words each
+generated function accesses, run:
+
+```bash
+python tools/map_session_auth_monoliths.py
+python tools/map_session_auth_monoliths.py --path s7commplus/session_auth/family0/_generated/monolith1.py
+```
+
+The JSON output links each generated file to its C# source path. This is a
+*syntactic* access map, not a dependency proof: an input listed for a function
+may not influence every output. The mapper rejects dynamic word indexes rather
+than silently presenting an incomplete map. Use it to select a smaller target
+for tracing and differential tests; do not edit the verified generated code just
+to make it look simpler.
+
+Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
+but it needs a separate authentication implementation. The Family-0
+`RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
+enabled by changing its family check or blob length.
+
 ### Review boundary
 
 - Human-maintained flow and extension points live outside `_generated/`.
