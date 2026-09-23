@@ -1,8 +1,9 @@
 """Trace candidate span semantics and compose them through the real setup AST.
 
-Wrapper identities are hypotheses checked on synthetic executions, NOT source
-proofs. Composition is exact conditional on those identities. Single-threaded
-patching only; never supply live authentication material.
+The default composition omits the source-derived wrapper corrections and is
+therefore conditional on their vanishing. The corrected composition retains
+every wrap/truncation and final-merge term. Neither is an input-only encoded
+replacement. Single-threaded patching only; never supply live secrets.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import inspect
 import json
 import random
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from fractions import Fraction
@@ -93,6 +94,13 @@ class Expression:
     def scale(self, factor: Fraction | int) -> Expression:
         return Expression(tuple((name, value * factor) for name, value in self.terms if value * factor))
 
+    def evaluate(self, values: Mapping[str, int]) -> int:
+        """Evaluate over Z/pZ using unit denominators, not a primality assumption."""
+        return (
+            sum(coefficient.numerator * pow(coefficient.denominator, -1, P) * values[name] for name, coefficient in self.terms)
+            % P
+        )
+
 
 Pointer = tuple[str, int]
 
@@ -108,17 +116,52 @@ def _pointer(node: ast.expr) -> Pointer:
     raise ValueError("unsupported setup pointer")
 
 
-def compose() -> dict[int, Expression]:
-    """Compose hypotheses through source calls, retaining unknown pair splits.
+def _copied_payload(node: ast.expr) -> Pointer:
+    """Validate bytes(ctx/w[offset:offset+24]) instead of assuming merge inputs."""
+
+    def integer(value: ast.expr | None) -> int:
+        if isinstance(value, ast.Constant) and type(value.value) is int:
+            return value.value
+        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+            return integer(value.left) + integer(value.right)
+        raise ValueError("unsupported setup copy offset")
+
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "bytes"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        source = node.args[0]
+        if (
+            isinstance(source, ast.Subscript)
+            and isinstance(source.value, ast.Name)
+            and source.value.id in {"ctx", "w"}
+            and isinstance(source.slice, ast.Slice)
+            and source.slice.step is None
+        ):
+            offset = integer(source.slice.lower)
+            if integer(source.slice.upper) == offset + 24:
+                return ("cv" if source.value.id == "ctx" else "wv"), offset
+    raise ValueError("unsupported setup payload copy")
+
+
+def compose(*, corrected: bool = False) -> dict[int, Expression]:
+    """Compose span identities through source calls, retaining unknown pair splits.
 
     Pair members are NOT assumed to have individually affine semantics. Fresh
     nuisance variables represent their unknown split and must cancel at exits.
+    With corrections, c0..c22 denote additive wrapper residue corrections in
+    source-call order; merge<slot> denotes that slot's final carry correction.
     """
     zero = Expression(())
     encoded = {("data", 0): zero, ("data", 72): Expression.variable("d")}
     plain = {("wv", 0): Expression.variable("X"), ("wv", 72): Expression.variable("Y"), ("wv", 48): Expression.variable("R")}
     result = {}
+    packed_pairs = {}
     count = 0
+    merges = set()
     body = ast.parse(inspect.getsource(transform7.execute)).body[0]
     if not isinstance(body, ast.FunctionDef):
         raise ValueError("expected Transform7 function")
@@ -134,6 +177,19 @@ def compose() -> dict[int, Expression]:
         if isinstance(call.func, ast.Attribute) and call.func.attr == "rotate_right_30":
             plain["wv", 0] = plain["wv", 0].scale(4)
             continue
+        if isinstance(call.func, ast.Name) and call.func.id == "big_int_addition":
+            if len(call.args) != 3 or call.keywords:
+                raise ValueError("unexpected setup merge signature")
+            bank, offset = _pointer(call.args[0])
+            slot = offset // 24
+            if bank != "cv" or offset % 24 or slot not in result or slot in merges:
+                raise ValueError("unexpected setup merge destination")
+            if tuple(_copied_payload(node) for node in call.args[1:]) != packed_pairs[slot]:
+                raise ValueError("setup merge does not consume its Monolith5 output pair")
+            if corrected:
+                result[slot] = result[slot] + Expression.variable(f"merge{slot}")
+            merges.add(slot)
+            continue
         if not isinstance(call.func, ast.Name) or call.func.id not in NAMES:
             continue
         name = call.func.id
@@ -147,11 +203,14 @@ def compose() -> dict[int, Expression]:
             value = value + encoded[inputs[2]]
             if name == NAMES[3]:
                 value = value.scale(Fraction(1, 2))
+        if corrected:
+            value = value + Expression.variable(f"c{count}")
         if name == NAMES[2]:
             bank, offset = pointers[0]
             if bank != "cv" or offset % 24:
                 raise ValueError("unexpected setup context destination")
             result[offset // 24] = value
+            packed_pairs[offset // 24] = tuple(pointers[:2])
         elif outputs == 1:
             encoded[pointers[0]] = value
         else:
@@ -159,7 +218,7 @@ def compose() -> dict[int, Expression]:
             encoded[pointers[0]] = split
             encoded[pointers[1]] = value + split.scale(-1)
         count += 1
-    if count != 23 or set(result) != {46, 48, 70, 94}:
+    if count != 23 or set(result) != {46, 48, 70, 94} or merges != set(result):
         raise ValueError("unexpected setup call graph")
     if any(name.startswith("split") for expression in result.values() for name, _ in expression.terms):
         raise ValueError("unknown output-pair split survives setup composition")
@@ -191,7 +250,7 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "scope": "sampled wrapper hypotheses; exact source composition CONDITIONAL on those hypotheses",
+                "scope": "sampled zero-correction wrappers; exact source composition CONDITIONAL on corrections vanishing",
                 "cases": len(cases),
                 "wrapper_observations": len(observations),
                 "mismatches": [asdict(value) for value in observations if value.actual != value.expected],

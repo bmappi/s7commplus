@@ -455,10 +455,93 @@ python -m tools.prove_monolith3_span_identity --timeout-ms 10000 --progress
 
 The decoded setup-wrapper identities are now source-derived: Monolith4's
 addition, Monolith3/6's corrected pair halving, and Monolith5's combined packing.
-Next: compose **all corrections**, including Monolith5's 2^168 wrap and the
-already derived carry-sensitive merge, through the real setup. Establishing
-input-only high-bit/encoding invariants is still required for a compact runtime
-rewrite. Runtime code and dependencies remain unchanged.
+Their correction-aware composition is described below. Establishing input-only
+high-bit/encoding invariants is still required for a compact runtime rewrite.
+Runtime code and dependencies remain unchanged.
+
+## All-correction setup composition
+
+`tools.trace_transform7_setup_shadows.compose(corrected=True)` walks the actual
+setup AST, assigns one additive residue correction c0..c22 to each wrapper in
+source-call order, and retains arbitrary individual pair splits. Every split
+cancels at the four modeled context exits. It validates that each subsequent
+merge copies precisely that Monolith5 call's two 24-byte output streams, rather
+than assuming its operands from the destination alone. All arithmetic below is
+modulo p, with division meaning multiplication by a unit inverse; no primality
+assumption is needed.
+
+For each call, its correction is determined by the preceding source-derived
+kernel relation, not by subtracting the observed field output from the affine
+prediction:
+
+- Monolith3: c=6016*m - 12032*(N >> 170), relative to
+  (V0+V1)/2 + N/4. The wrap uses the decoded output pair; N is the entire
+  192-bit plain input, so generic raw calls retain the truncation correction.
+- Monolith4: c=-12032*overflow, relative to V0+V1. Overflow is the
+  input-derived predicate B0+B1+h0*h1 >= 2^168; the actual decoded output is
+  checked against the complete input-derived addition equation.
+- Monolith6: c=6016*m, relative to (V0+V1+V2)/2. The wrap again uses the
+  decoded output pair.
+- Monolith5: let T=B0+B1+B2+H*parity(h0,h1,h2)+majority(h0,h1,h2), and
+  let A,B be its actual packed 168-bit output streams. Then
+  m=(A+B-T)/2^168 is an integer by the exact combined-payload identity,
+  and c=12032*m, relative to V0+V1+V2. This is the previously omitted
+  packed-sum wrap; a congruence modulo 2^168 is not equality modulo p.
+
+The resulting four residue expressions are the earlier affine expressions
+**plus** weighted call corrections and each slot's own final-merge correction.
+The complete coefficients are printed by the trace command and pinned in
+tests. Their dependency neighborhoods are:
+
+| Context slot | Wrapper-call corrections that survive |
+| --- | --- |
+| 46 | 0, 2, 3, 4, 5 |
+| 48 | 0, 1, 2, 3, 6, 9, 10, 11, 12, 13, 14, 17, 18, 19, 20 |
+| 70 | 0, 1, 2, 11, 12, 13, 14, 15, 16 |
+| 94 | 21, 22 |
+
+Calls 7 and 8 have no downstream consumers affecting these four setup slots.
+This observation alone is not authorization to remove their runtime calls.
+For example, slot 46 is
+
+    d/4 + X/4 + Y/2 + R/8 + c0/2 + c2 + 2*c3 + c4 + c5 + merge46
+
+Here X is the first source coordinate, Y and R have setup's forced bit 2,
+d is the bundled nonzero span shadow, and merge46=(94-2^128)*E46. Each E
+is the already derived lost-carry predicate on that slot's two **prepared
+individual** streams. Their modular sum alone does not determine E.
+
+`tools/trace_transform7_setup_corrections.py` copies inputs before aliased
+wrapper writes, independently measures each correction, checks its decoded
+identity, verifies all four merge outputs byte-for-byte, and evaluates the
+corrected AST expressions against the real setup context residues. In 132
+synthetic cases it checks 3,036 wrappers and 528 merges with no residue
+mismatches. All sampled wrapper wraps and plain truncations are zero; exactly
+one final merge has the known lost carry. On that legal bundled-base-point
+witness, the corrected composition predicts slot 46 = 94, whereas the
+uncorrected affine candidate predicts 2^128. No interpolation is needed to
+evaluate the corrected composition.
+
+Tests additionally exercise 64 arbitrary raw executions of **each** wrapper,
+including nonzero wraps and Monolith3's high-plain-bit truncation. An independent
+handwritten call-graph recurrence checks 100 arbitrary assignments of all
+correction symbols, including symbols that did not become nonzero in sampled
+real setups. A source mutation using the wrong merge operand is rejected.
+
+```bash
+python -m tools.trace_transform7_setup_corrections
+```
+
+This closes the algebraic correction-accounting gap, not the encoding-invariant
+proof gap. The result is an exact composition of source-derived **decoded
+relations with measured corrections**, checked on synthetic setup executions;
+it is neither an input-only replacement nor a universal proof that legal
+setups have zero wraps. The four expressions predict residues, not arbitrary
+encoded pair members or exact context representatives from input residues
+alone. Next: prove the high-bit/range invariants for the 21 contributing calls,
+or recover any nonzero correction predicates from legal setup inputs, while
+preserving the final merge's representative-sensitive carry behavior. Runtime
+and generated code remain unchanged.
 
 ## Dependency neighborhoods
 
