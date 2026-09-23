@@ -279,6 +279,83 @@ those above `p`; it intentionally preserves compatibility corrections. The
 remaining semantic problem is deriving constraints on the four setup values
 and their evolving recurrence, now without unrelated scratch slots.
 
+## Candidate setup encoding and a reachable exception
+
+`tools/recover_transform7_setup.py` captures the real setup before its first
+scalar dispatch, then interpolates a candidate affine map from four fixed
+synthetic probes. This is **interpolation, not symbolic recovery** of the setup
+monoliths. Fresh random probes test the candidate independently of those four
+recovery probes. The tool uses only synthetic integers and temporarily patches
+the dispatcher in a single thread; it must not receive live secrets.
+
+Write `X` and `Yraw` for the first and second little-endian 160-bit source
+integers, and `Rraw` for the first PRNG integer. The real setup forces bit 2
+in both `Yraw` and `Rraw`, so the candidate uses `Y = Yraw OR 4` and
+`R = Rraw OR 4`, not the unmodified inputs. For `p = 2^160 - 47`, it predicts
+the residues of slots 46, 48, and 70 as:
+
+```text
+s46 = c46 + X/4   + Y/2    + R/8
+s48 = c48 + 3X/32 + 5Y/16  + 15R/64
+s70 = c70 + X/8   + Y/4    + 3R/16
+```
+
+Here division means multiplication by the corresponding unit's modular
+inverse, not integer division. These inverses exist because `p` is odd; no
+primality assumption is needed. The recovered offsets are:
+
+```text
+c46 = 119837857766959630917594351638328714638160910892
+c48 = 1075284659745460397989926177318336564412678890279
+c70 = 419432502184358708211580230734150501233563188122
+```
+
+The candidate also predicts `s94 = X` modulo `p`. Centering the three mixed
+values as `u=s46-c46`, `v=s48-c48`, and `w=s70-c70` gives the particularly
+small inverse:
+
+```text
+X = -16v + 20w
+Y = 3u + 8v - 12w
+R = -4u + 8w
+```
+
+Matrix multiplication verifies that this is exactly the inverse of the
+candidate affine map modulo `p`. This identifies a useful potential input
+representation; it does not prove that the source integers are conventional
+curve coordinates, or that this map matches every byte-level setup execution.
+
+With seed `0x714`, four structured and 1024 fresh random setup probes matched
+the candidate residues. A deliberately constructed **reachable** exception
+then disproves universal equivalence. Use the actual bundled base-point source
+`TRANSFORM7_DATA[0xD8:]` and the valid first-PRNG integer:
+
+```text
+Rraw = 1456322070154714087054275448276265639382807574476
+```
+
+This value is within the allowed 160-bit range and already has bit 2 set.
+Solving the candidate's first row targets `s46=2^128`, but the real setup
+returns `s46=94`; its other two mixed values match the candidate. The four-word
+addition carry correction explains this exact discrepancy. With the second
+PRNG integer set to 1, substituting the candidate's three values before the
+first dispatch changes the **complete 72-byte Transform7 destination**.
+This is not an arbitrary malformed public point: the source is the same
+bundled base-point data that SeedTransform uses. It is nevertheless a synthetic
+execution, not a hardware capture or a demonstration of an authentication
+failure on a PLC.
+
+```bash
+python -m tools.recover_transform7_setup --random-cases 1024
+```
+
+The report labels the map as a candidate and includes the targeted probe after
+the ordinary verification probes; that final mismatch is expected. Tests lock
+the rational coefficients, offsets, and inverse identity, verify fresh samples
+and forced-bit behavior, and preserve both the setup exception and its final
+Transform7 effect. The intended cleanup therefore needs exact compatibility
+handling, not just an affine setup followed by ordinary field arithmetic.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
