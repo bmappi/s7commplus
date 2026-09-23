@@ -16,17 +16,21 @@ import time
 from pathlib import Path
 from typing import Any
 
-from s7commplus.session_auth.family0._generated import monolith4
+from s7commplus.session_auth.family0._generated import monolith3, monolith4, monolith6
 from tools.recover_monolith4_span_identity import input_gate_diagram, normalized_span, normalized_terms, output_gate_diagram
 from tools.recover_monolith5 import _literal
 
 
-def symbolic_source() -> tuple[Any, list[Any], list[Any]]:
+def symbolic_source(number: int = 4) -> tuple[Any, list[Any], list[Any]]:
+    modules = {3: (monolith3, 42, 36), 4: (monolith4, 36, 18), 6: (monolith6, 54, 36)}
+    if number not in modules:
+        raise ValueError("unsupported decoded-span monolith")
+    module_source, source_count, destination_count = modules[number]
     try:
         import z3
     except ImportError as error:
         raise RuntimeError("install the development-only analysis extra to run this proof") from error
-    path = Path(monolith4.__file__)
+    path = Path(module_source.__file__)
     module = ast.parse(path.read_text(encoding="utf-8"))
     constants = [
         node
@@ -44,7 +48,7 @@ def symbolic_source() -> tuple[Any, list[Any], list[Any]]:
     ):
         raise ValueError("unexpected logical-shift helper")
     function = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "execute")
-    source = [z3.BitVec(f"source_{word}", 32) for word in range(36)]
+    source = [z3.BitVec(f"source_{word}", 32) for word in range(source_count)]
     values: dict[str, Any] = {}
     destination: dict[int, Any] = {}
 
@@ -114,17 +118,19 @@ def symbolic_source() -> tuple[Any, list[Any], list[Any]]:
                 raise ValueError("unexpected writeback")
         else:
             raise ValueError("unexpected generated assignment")
-    if set(destination) != set(range(18)):
-        raise ValueError("expected all eighteen output words")
-    return z3, source, [destination[word] for word in range(18)]
+    if set(destination) != set(range(destination_count)):
+        raise ValueError("expected every output word")
+    return z3, source, [destination[word] for word in range(destination_count)]
 
 
-def boolean_backend(z3: Any) -> Any:
+def boolean_backend(z3: Any, source_words: int = 36) -> Any:
     """Reusable demanded-bit backend for prefix and carry-stage proofs."""
+    if source_words <= 0:
+        raise ValueError("expected positive source word count")
 
     class Backend:
         def __init__(self) -> None:
-            self.refs = [(word, bit) for word in range(36) for bit in range(32)]
+            self.refs = [(word, bit) for word in range(source_words) for bit in range(32)]
             self.ref_index = {ref: index for index, ref in enumerate(self.refs)}
             self.variables = [z3.Bool(f"bit_{word}_{bit}") for word, bit in self.refs]
 

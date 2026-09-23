@@ -277,6 +277,100 @@ establishes only its decoded payload and boundary, not individual encoded output
 words or the safety of a whole-pipeline modular rewrite. Runtime source and
 dependencies remain unchanged.
 
+## Monolith6: local carry proof and corrected pair halving
+
+`tools/prove_monolith6_span_identity.py` establishes a decoded **pair** identity
+from the pinned generated Monolith6 AST. There are three normalized inputs
+`(Bi,hi)` and two outputs `(Oj,gj)`, with the same H=(p+1)/2 and M=2^168.
+Define:
+
+```text
+q = parity(h0,h1,h2)
+a = majority(h0,h1,h2)
+T = B0+B1+B2+H*q+a
+U = 2*(O0+O1)+g0+g1
+U = T                         (mod M)
+g0+g1 <= 1
+```
+
+This is not unconditional field halving: M is nonzero modulo p. The local
+proof also establishes the signed wrap balance m is -1, 0, or 1. Consequently:
+
+```text
+m = (U-T)/M
+2*(V(out0)+V(out1))-sum(V(in)) = M*m+p*(g0+g1-a)     (exact integers)
+V(out0)+V(out1) = H*sum(V(in))+6016*m                (mod p)
+2*(D(out0)+D(out1))-sum(D(in)) = n+M*m+p*(g0+g1-a)   (exact integers)
+```
+
+Here the exact-integer V means B+H*h before reduction; D=n+V remains the
+weighted signed decoder. These equations use only 2H=p+1 and M mod p=12032,
+not a primality assumption. The m calculation currently uses actual output
+high bits; it is **not an input-only prediction** from the current decoder.
+
+The source proof decomposes the equation into local integer columns. Let nik
+be input i's payload bit k, Nk=sum_i(nik), and fk=bit_k(H). Set:
+
+```text
+ak = majority(h0,h1,h2)            if k=0
+ak = majority(n0,k-1,n1,k-1,n2,k-1) otherwise
+rk = floor((Nk+fk*q+ak)/2)
+g0+g1 = N0+q+a0-2*r0
+o0,k-1+o1,k-1 = Nk+fk*q+r(k-1)-2*rk   k=1..167
+m = o0,167+o1,167-r167
+-1 <= m <= 1
+```
+
+The initial column and 167 subsequent columns telescope to U=T modulo M;
+the top-bit equation gives its exact wrap balance. The carries are explicit
+input functions, not assumed equalities or growing ideal-prefix recurrences.
+Each equality is proved independently for all source assignments. Four-bit
+bitvector arithmetic encodes these small integer comparisons exactly: counts
+are at most five, carries at most two, and column differences lie between
+-6 and 6, so no mismatch can alias zero modulo 16. Dependency-free tests check
+these bounds and the integer equations independently.
+
+With Z3 4.16.0, all **170 obligations returned UNSAT**: boundary exclusivity,
+initial column, 167 local columns, and the wrap bound. Stage time totaled about
+5.46 seconds, with no stage exceeding 0.10 seconds in the recorded run. This
+excludes source compilation and eight generated-runtime controls comparing both
+the independent fixed-width AST and demanded-bit compilers. A full-width query
+previously timed out after 60 seconds, and the slower prefix formulation remains
+available as `--prefix-queries`; neither a timeout nor an interrupted run is a
+completed proof.
+
+`tools/monolith6_span_proof.json` records the source/model hashes, Z3 version,
+timings, and all completed obligations. Like the Monolith4 record, it is **not
+an independently checkable proof certificate**. Normal tests verify provenance
+and accounting without requiring Z3; rerun the optional harness for the proof.
+The shared demanded-bit evaluator now supports separately cached versioned
+Monolith3/4/6 programs and output spans. Concrete controls exercise all three
+on one backend, retaining the existing Monolith4 defaults and bounded proof.
+
+`tools/recover_monolith6_span_identity.py` checks 1,000 arbitrary raw sources:
+all corrected shadows match, with wrap counts m=-1:256, m=0:515, and m=1:229.
+It preserves a stronger negative control for decoded-only state. Compare an
+all-zero 216-byte source with one whose uint32 word 17 has bit 9 set. All
+three `(Bi,hi)` inputs are identical, but O0 decreases by 2^167, O1 is unchanged,
+and the output pair shadow decreases by 6016 modulo p. The first source has
+m=1, the second m=0. The bit sits outside the current input decoder and shifts
+into the output's highest payload position. Therefore the existing input
+payload/boundary model cannot determine even the complete output-pair shadow
+for arbitrary raw sources. This is a synthetic kernel counterexample, not a
+hardware authentication-failure claim.
+
+```bash
+python -m tools.recover_monolith6_span_identity
+python -m tools.prove_monolith6_span_identity --timeout-ms 10000 --progress
+```
+
+Next: derive Monolith3's corresponding source equations, and track these extra
+high bits or prove encoding bounds through the real setup call graph. The
+conditional affine setup composition still assumes the uncorrected halving
+relationship and does not incorporate these wraps. This pair proof does not
+recover the individual output split or justify a modular runtime substitution.
+Runtime code and dependencies remain unchanged.
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:

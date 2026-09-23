@@ -54,9 +54,11 @@ def _gate(bdd: BDD, term: Term, bits: list[int]) -> int:
     raise ValueError("unsupported gate")
 
 
-@lru_cache(maxsize=1)
-def _program() -> list[tuple[str, ast.expr]]:
-    path = REPOSITORY_ROOT / "s7commplus/session_auth/family0/_generated/monolith4.py"
+@lru_cache(maxsize=3)
+def _program(monolith: int = 4) -> list[tuple[str, ast.expr]]:
+    if monolith not in (3, 4, 6):
+        raise ValueError("unsupported decoded-span monolith")
+    path = REPOSITORY_ROOT / f"s7commplus/session_auth/family0/_generated/monolith{monolith}.py"
     module = ast.parse(path.read_text(encoding="utf-8"))
     execute = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "execute")
     statements = []
@@ -71,11 +73,15 @@ def _program() -> list[tuple[str, ast.expr]]:
     return statements
 
 
-def output_gate_diagram(term: Term, bdd: BDD) -> int:
+def output_gate_diagram(term: Term, bdd: BDD, monolith: int = 4, span: int = 0) -> int:
+    if monolith not in (3, 4, 6) or not 0 <= span < (1 if monolith == 4 else 2):
+        raise ValueError("unsupported decoded-span output")
     # One versioned evaluator per backend shares every demanded carry bit
     # across output words and decoder terms instead of rebuilding their DAGs.
-    if not hasattr(bdd, "_monolith4_evaluate"):
-        statements = _program()
+    if not hasattr(bdd, "_monolith_evaluators"):
+        bdd._monolith_evaluators = {}
+    if monolith not in bdd._monolith_evaluators:
+        statements = _program(monolith)
         bindings: list[dict[str, int]] = []
         latest: dict[str, int] = {}
         for index, (name, _) in enumerate(statements):
@@ -136,14 +142,14 @@ def output_gate_diagram(term: Term, bdd: BDD) -> int:
                     return bdd.invert(bdd.apply("and", bdd.invert(left), bdd.invert(right)))
             raise ValueError(f"unsupported bit expression {ast.dump(node)}")
 
-        bdd._monolith4_evaluate = evaluate
-        bdd._monolith4_latest = latest
-    statements = _program()
+        bdd._monolith_evaluators[monolith] = evaluate, latest
+    evaluate_bit, latest = bdd._monolith_evaluators[monolith]
+    statements = _program(monolith)
     bits = []
     for member in range(3):
-        word = term.chunk * 3 + member
-        index = bdd._monolith4_latest[f"dst_dwords[{word}]"]
-        bits.append(bdd._monolith4_evaluate(statements[index][1], term.bit, index))
+        word = span * 18 + term.chunk * 3 + member
+        index = latest[f"dst_dwords[{word}]"]
+        bits.append(evaluate_bit(statements[index][1], term.bit, index))
     return _gate(bdd, term, bits)
 
 
