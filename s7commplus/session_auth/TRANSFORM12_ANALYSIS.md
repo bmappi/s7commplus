@@ -91,6 +91,43 @@ It does not yet identify the tail as a particular curve-coordinate conversion
 or field-inversion formula. The next semantic analysis can focus on a fixed
 two-input program rather than 178 apparently conditional blocks.
 
+## Independent integer semantics
+
+`tools/transform12_integer_model.py` recovers the arithmetic without calling
+Prepare, Finalize, or any runtime arithmetic helper. Canonically packed operands
+represent an unsigned 160-bit integer: each of the first five little-endian
+uint32 words stores 28 bits shifted left by two; the sixth stores the remaining
+20 bits shifted left by two. All 768 constant rows use this packing. Canonical
+packing does **not** mean a representative is reduced modulo a field modulus.
+Arbitrary noncanonical Prepare inputs are outside this model's domain.
+
+The overflow fold multiplies the bits above position 159 by 47, consistent with
+the candidate modulus `p = 2^160 - 47`. But ordinary `% p` is not an exact
+replacement for the current implementation:
+
+- Addition leaves results below `2^160` unreduced. On overflow it adds 47 to
+  only the low 128 bits. A carry beyond those four words is discarded and an
+  additional 94 is added to the low word instead of incrementing word five.
+- Subtraction subtracts an additional 47 only for negative differences, then
+  truncates the signed representation to 160 bits.
+- Multiplication and square fold overflow at most twice. If overflow remains,
+  the final correction adds 47 to the low uint32 without propagating its carry,
+  and the result is truncated to 160 bits.
+
+A concrete counterexample uses **two already reduced operands**:
+`a = p - 1`, `b = 2^128 + 47`. Runtime addition returns `140`, whereas
+`(a + b) % p = 2^128 + 46`; these are not even congruent modulo `p`.
+This is a compatibility finding, not evidence that this input occurs in an
+actual authentication session, or a reason to silently change the runtime.
+
+The independent model matches all 498 dispatches byte-for-byte on a seeded
+canonical context, plus ten complete fixed-tail contexts. Boundary and seeded
+random tests compare more than 8,000 primitive results with the runtime. This
+provides a smaller exact reference for further semantic recovery, but does not
+prove equivalence for every possible operand or identify the cryptographic
+construction. A field-level simplification needs additional range/invariant
+proofs or must preserve these compatibility corrections.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
