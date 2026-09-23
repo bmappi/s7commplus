@@ -215,16 +215,28 @@ boundary, and reproduction commands. The generated runtime code is unchanged.
 
 For Monolith5, fixed shifts make the bitwise-only method inapplicable. A
 symbolic ROBDD/ANF recovery yields an exact, compact analysis-only model with
-32 nine-input lane functions and a two-stream combination formula. See
+32 nine-input lane functions and a two-stream combination formula. Every lane
+function further separates into three identical choose/majority span gates
+and one symmetric combine. See
 [`MONOLITH5_ANALYSIS.md`](MONOLITH5_ANALYSIS.md) for the formula, proof boundary,
 and reproduction command. The generated runtime code is unchanged.
 
-The same per-bit symbolic approach also recovers exact, analysis-only models
-for Monolith7 output words 3–5 and 15–17. See
-[`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for the deliberately partial
-scope, the shared conditional-selection/majority cores for words 3–5, and
-verification commands. The other Monolith7 outputs are not replaced
-or claimed to be simplified.
+The same per-bit symbolic approach also recovers an exact decision model for
+all 1,152 Monolith7 output bits, alongside smaller readable models for words
+3–5 and 15–17. See [`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for coverage,
+shared conditional-selection/majority cores, size tradeoffs, and verification.
+
+Transform12's dispatched opcode tape can be decompiled into versioned packed
+arithmetic equations and sliced across block boundaries. The 89 stages of its
+second phase have identical branch alternatives and form a fixed two-input
+arithmetic program. See [`TRANSFORM12_ANALYSIS.md`](TRANSFORM12_ANALYSIS.md)
+for exact coverage and the distinction between tape equivalence and arithmetic
+or curve interpretation.
+
+[`MODEL_BENCHMARKS.md`](MODEL_BENCHMARKS.md) compares the recovered evaluators
+with generated code at the byte interface. Monolith11 is a promising runtime
+candidate; the current Monolith5 and full Monolith7 analysis evaluators are
+slower. The generated runtime is unchanged.
 
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0

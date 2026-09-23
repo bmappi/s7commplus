@@ -43,6 +43,53 @@ Every recovered lane function is symmetric under permutation of the three
 72-byte input spans; the test suite checks all 512 inputs and all six span
 permutations for every truth table.
 
+## Named gates and span structure
+
+The nine-input functions have a second, more readable exact decomposition.
+Every function applies the **same three-input gate** independently to each
+input span and then combines the three results:
+
+```text
+s0 = g(x0, x1, x2)
+s1 = g(x3, x4, x5)
+s2 = g(x6, x7, x8)
+F_k = h(s0, s1, s2)
+```
+
+The gate `g` is conditional selection (`choose`) or `majority`, with fixed
+argument permutations and input inversions. Its normalized value at `000`
+is zero. Under that normalization, exhaustive search finds exactly one
+complete decomposition for each of the 32 functions. The symmetric combine
+`h` belongs to four familiar operations:
+
+| Combine | Exact formula | Number of lane functions |
+| --- | --- | --- |
+| XOR of three | `a XOR b XOR c` | 15 |
+| Majority | `(a AND b) XOR (a AND c) XOR (b AND c)` | 15 |
+| OR of three | `a OR b OR c` | 1 |
+| Not all equal | `(a OR b OR c) XOR (a AND b AND c)` | 1 |
+
+Here `choose(a,b,c) = b XOR ((a XOR b) AND c)`. For example, lane
+function zero uses `choose(x0,x1,x2)` in each span and `not_all_equal`
+to combine the three results. This structure explains the previously observed
+symmetry under permutation of whole input spans. It does not by itself identify
+the proprietary algorithm or establish a cryptographic interpretation.
+
+`tools/recover_monolith5_gates.py` checks all 512 rows for every candidate
+decomposition and recognizes the local gates through the shared Boolean
+decomposition machinery. The saved `tools/monolith5_gate_model.json` contains
+32 gate records. The evaluator `tools/monolith5_gate_model.py` applies each
+gate to entire uint32 words, evaluating 32 bit lanes together; it reuses the
+existing 168 position records to reconstruct all twelve output words.
+The exhaustive tests compare all 16,384 lane-function truth rows with the
+original LUTs, in addition to the known-answer vector and comparisons against
+the generated implementation on structured, single-bit, and random inputs.
+
+```bash
+python -m tools.recover_monolith5_gates --formula 0
+python -m tools.recover_monolith5_gates --verify tools/monolith5_gate_model.json
+```
+
 ## Dependency neighborhoods
 
 The source-word neighborhoods repeat across the two six-word outputs:

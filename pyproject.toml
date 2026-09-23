@@ -45,6 +45,8 @@ s7commplus = [
     "session_auth/MONOLITH5_ANALYSIS.md",
     "session_auth/MONOLITH7_ANALYSIS.md",
     "session_auth/MONOLITH11_ANALYSIS.md",
+    "session_auth/TRANSFORM12_ANALYSIS.md",
+    "session_auth/MODEL_BENCHMARKS.md",
     "session_auth/LICENSE-HarpoS7",
     "session_auth/artifacts.json",
     "zlib_dicts/*.xml",

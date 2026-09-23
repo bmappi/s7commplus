@@ -41,6 +41,27 @@ Build the documentation
 The same warning-strict Sphinx command runs in GitHub Actions and Read the
 Docs. Open ``docs/_build/html/index.html`` after a local build.
 
+Session authentication research
+-------------------------------
+
+The checkout includes analysis tools for the HarpoS7-derived authentication
+transforms. They regenerate exact Boolean models, print recovered gate
+formulas, decompile arithmetic tape dependencies, and benchmark model costs:
+
+.. code-block:: console
+
+   python -m tools.recover_monolith5_gates --formula 0
+   python -m tools.recover_monolith7_full --verify tools/monolith7_full_model.json
+   python -m tools.decompile_transform12 --phase2 --output-slot 27
+   python -m tools.benchmark_session_auth_models
+
+The tools run from the checkout and do not replace the packaged runtime.
+Read the `analysis and verification boundary
+<https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/session_auth/ARCHITECTURE.md>`_
+and `model benchmark findings
+<https://github.com/gijzelaerr/s7commplus/blob/master/s7commplus/session_auth/MODEL_BENCHMARKS.md>`_
+before using a recovered evaluator as an implementation.
+
 Release process
 ---------------
 
