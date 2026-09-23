@@ -186,6 +186,26 @@ than silently presenting an incomplete map. Use it to select a smaller target
 for tracing and differential tests; do not edit the verified generated code just
 to make it look simpler.
 
+To narrow the map to a single 32-bit destination word, run:
+
+```bash
+python tools/trace_session_auth_output.py 3 0
+python tools/trace_session_auth_output.py 3 0 --steps
+python tools/trace_session_auth_output.py 9 0 --json
+```
+
+The first argument is the monolith number (1–11), and the second is the
+zero-based output word. The default output summarizes possible input words and
+contributing assignment counts. `--steps` prints file/line locations and
+direct dependencies for each contributing assignment; `--json` returns the
+complete machine-readable backward slice. Monolith9 and Monolith10 follow
+their ordered Part files and shared scratch array. The trace versions repeated
+assignments so overwritten values do not appear as false dependencies. It is
+conservative *word-level* data flow: a listed input may not affect every bit,
+and constants or algebraic cancellation may remove actual influence. Treat
+these results as navigation aids, not cryptographic proofs or replacement tests
+for byte-exact vectors.
+
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
 `RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
