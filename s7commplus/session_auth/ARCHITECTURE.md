@@ -219,6 +219,12 @@ symbolic ROBDD/ANF recovery yields an exact, compact analysis-only model with
 [`MONOLITH5_ANALYSIS.md`](MONOLITH5_ANALYSIS.md) for the formula, proof boundary,
 and reproduction command. The generated runtime code is unchanged.
 
+The same per-bit symbolic approach also recovers an exact, analysis-only model
+for Monolith7 output words 15–17. See
+[`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for the deliberately partial
+scope and verification command. The other Monolith7 outputs are not replaced
+or claimed to be simplified.
+
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
 `RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
