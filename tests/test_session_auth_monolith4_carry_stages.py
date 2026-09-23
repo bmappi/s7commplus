@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import itertools
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from tools.prove_monolith4_carry_stages import abstract_cone, proof_progress, prove
+from tools import prove_monolith4_carry_stages as carry_proof
 
 
 class Node:
@@ -114,3 +119,73 @@ def test_progress_never_counts_beyond_a_gap_or_completes_a_partial_run() -> None
 def test_prover_rejects_invalid_limits_before_loading_optional_solver(kwargs: dict[str, int]) -> None:
     with pytest.raises(ValueError, match="positive timeout"):
         prove(**kwargs)
+
+
+@pytest.mark.parametrize("failure", (None, "sat", "unknown"))
+def test_source_solver_keeps_dag_and_counts_only_completed_stages(monkeypatch: pytest.MonkeyPatch, failure: str | None) -> None:
+    outcomes = iter(["unsat"] * (169 if failure is None else 3) + ([] if failure is None else [failure]))
+    roots = [object() for _ in range(169)]
+    submitted: list[object] = []
+    tactics: list[str] = []
+
+    class Solver:
+        def set(self, *, timeout: int) -> None:
+            assert 0 < timeout <= 1000
+
+        def add(self, root: object) -> None:
+            submitted.append(root)
+
+        def check(self) -> str:
+            return next(outcomes)
+
+        def reason_unknown(self) -> str:
+            return "test timeout"
+
+    def tactic(name: str) -> SimpleNamespace:
+        tactics.append(name)
+        return SimpleNamespace(solver=Solver)
+
+    # No simplify method: an eager source-DAG rewrite fails this control.
+    fake_z3 = SimpleNamespace(Tactic=tactic, sat="sat", unsat="unsat", unknown="unknown", get_version_string=lambda: "test")
+    stages = [(f"stage_{index}", root, frozenset()) for index, root in enumerate(roots)]
+    monkeypatch.setattr(carry_proof, "equations", lambda: (fake_z3, None, stages))
+    observed: list[dict[str, Any]] = []
+
+    def progress(row: dict[str, Any]) -> None:
+        observed.append(row.copy())
+        row["proved"] = False  # Observers must not mutate proof accounting.
+
+    report = prove(progress=progress)
+    count = 169 if failure is None else 4
+    assert submitted == roots[:count]
+    assert tactics == ["sat"] * (count + 1)
+    assert observed == report["stages"]
+    assert all(row["elapsed_seconds"] >= 0 for row in observed)
+    assert report["full_proof"] is (failure is None)
+    assert report["proved_payload_prefix_bits"] == (168 if failure is None else 2)
+    if failure == "unknown":
+        assert report["stages"][-1]["reason"] == "test timeout"
+    elif failure == "sat":
+        assert "reason" not in report["stages"][-1]
+
+
+def test_recorded_full_run_has_current_source_and_models_and_all_obligations() -> None:
+    # This checks a recorded solver run's provenance and bookkeeping, not a
+    # proof certificate. Replaying the proof requires the optional Z3 extra.
+    directory = Path(carry_proof.__file__).parent
+    report = json.loads((directory / "monolith4_carry_proof.json").read_text(encoding="utf-8"))
+    assert report["source_sha256"] == hashlib.sha256(Path(carry_proof.monolith4.__file__).read_bytes()).hexdigest()
+    for name, digest in report["gate_model_sha256"].items():
+        assert digest == hashlib.sha256((directory / name).read_bytes()).hexdigest()
+    assert set(report["gate_model_sha256"]) == {"monolith5_model.json", "monolith5_gate_model.json"}
+    assert report["stage_range"] == [0, 169]
+    assert report["abstraction"] is False
+    assert report["retain_lemmas"] is False
+    assert report["translation_controls"] == 8
+    assert [row["stage"] for row in report["stages"]] == ["boundary", "initial_carry"] + [
+        f"carry_{bit}_to_{bit + 1}" for bit in range(167)
+    ]
+    assert all(row["result"] == "unsat" and row["proved"] and row["independent_cut_signals"] == 0 for row in report["stages"])
+    assert proof_progress(report["stages"], *report["stage_range"]) == (168, True)
+    assert report["proved_payload_prefix_bits"] == 168
+    assert report["full_proof"] is True

@@ -67,6 +67,29 @@ def test_full_candidate_and_carry_correction_on_arbitrary_raw_spans() -> None:
     assert overflows == {False, True}
 
 
+def test_exact_signed_decoder_addition_retains_boundary_and_overflow_corrections() -> None:
+    model = recover()
+    offset = sum(term.weight for term in model.terms if term.weight < 0)
+
+    def signed(span: bytes) -> int:
+        words = struct.unpack("<18I", span)
+        return sum(term.weight * local_gate(term, words) for term in model.terms)
+
+    rng = random.Random(0x4DADD)
+    branches = set()
+    for _ in range(128):
+        left, right = rng.randbytes(72), rng.randbytes(72)
+        _, h0 = normalized_span(struct.unpack("<18I", left))
+        _, h1 = normalized_span(struct.unpack("<18I", right))
+        _, _, overflow = candidate_add(left, right)
+        output = bytearray(72)
+        transform7.monolith4_with_copy(output, left, right)
+        # Exact integers, not just residues modulo p or 2^168.
+        assert signed(bytes(output)) == signed(left) + signed(right) - offset - P * (h0 & h1) - MODULUS * overflow
+        branches.add((h0, h1, overflow))
+    assert branches == set(itertools.product((0, 1), (0, 1), (False, True)))
+
+
 @pytest.mark.parametrize("bits", (-1, 169))
 def test_proof_rejects_invalid_prefix(bits: int) -> None:
     with pytest.raises(ValueError, match="0..168"):

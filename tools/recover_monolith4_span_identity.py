@@ -183,7 +183,11 @@ def normalized_combined(source: Sequence[int]) -> int:
 
 
 def candidate_add(left: bytes, right: bytes) -> tuple[int, int, bool]:
-    """Candidate full Monolith4 addition; only its prefix is symbolically proved."""
+    """Decoded addition, now fully proved by the separate carry-stage harness.
+
+    The historical name is retained; this predicts decoded bits, not the raw
+    encoded output words, and is not a runtime replacement.
+    """
     if len(left) != 72 or len(right) != 72:
         raise ValueError("expected two 72-byte spans")
     a, h = normalized_span(struct.unpack("<18I", left))

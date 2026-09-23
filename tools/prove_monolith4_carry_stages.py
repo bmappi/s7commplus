@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import time
+from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 from pathlib import Path
@@ -106,22 +108,26 @@ def prove(
     abstraction: bool = False,
     continue_after_failure: bool = False,
     retain_lemmas: bool = False,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     if timeout_ms <= 0 or refinements < 0 or not 0 <= start < stop <= 169:
         raise ValueError("expected positive timeout and a range inside 0..169")
     z3, backend, stages = equations()
     results = []
-    shared_solver = z3.SolverFor("QF_FD")
+    shared_solver = z3.Tactic("sat").solver()
     for name, mismatch, local in stages[start:stop]:
         expanded: frozenset[int] = frozenset()
-        root = z3.simplify(mismatch)
-        deadline = time.monotonic() + timeout_ms / 1000
+        # Keep the shared source DAG intact. Pre-simplification changes the
+        # SAT encoding and can make otherwise tractable carry queries stall.
+        root = mismatch
+        began = time.monotonic()
+        deadline = began + timeout_ms / 1000
         for depth in range(refinements + 1):
             if abstraction:
                 abstracted, cuts = abstract_cone(z3, root, local, expanded)
             else:
                 abstracted, cuts = root, {}
-            solver = shared_solver if retain_lemmas and not abstraction else z3.SolverFor("QF_FD")
+            solver = shared_solver if retain_lemmas and not abstraction else z3.Tactic("sat").solver()
             solver.set(timeout=max(1, int((deadline - time.monotonic()) * 1000)))
             if abstraction or not retain_lemmas:
                 solver.add(abstracted)
@@ -137,21 +143,26 @@ def prove(
             if result != z3.sat or not cuts or time.monotonic() >= deadline:
                 break
             expanded |= cuts.keys()
-        results.append(
-            {
-                "stage": name,
-                "result": str(result),
-                "independent_cut_signals": len(cuts),
-                "refinements": depth,
-                "proved": result == z3.unsat,
-            }
-        )
+        row = {
+            "stage": name,
+            "result": str(result),
+            "independent_cut_signals": len(cuts),
+            "refinements": depth,
+            "proved": result == z3.unsat,
+            "elapsed_seconds": round(time.monotonic() - began, 6),
+        }
+        if result == z3.unknown:
+            row["reason"] = solver.reason_unknown()
+        results.append(row)
+        if progress is not None:
+            progress(row.copy())
         if result != z3.unsat and not continue_after_failure:
             break
     prefix, complete = proof_progress(results, start, stop)
     return {
         "scope": "source carry induction; generalized-cone SAT is not a source counterexample",
         "abstraction": abstraction,
+        "backend": "Z3 SAT tactic over the unsimplified demanded-bit source DAG",
         "stage_range": [start, stop],
         "solver_budget_per_stage_ms": timeout_ms,
         "retain_lemmas": retain_lemmas and not abstraction,
@@ -177,9 +188,17 @@ def main() -> None:
     parser.add_argument("--abstract", action="store_true")
     parser.add_argument("--continue-after-failure", action="store_true")
     parser.add_argument("--retain-lemmas", action="store_true")
+    parser.add_argument("--progress", action="store_true", help="write stage results to stderr; stdout stays JSON")
     args = parser.parse_args()
     report = prove(
-        args.timeout_ms, args.start, args.stop, args.refinements, args.abstract, args.continue_after_failure, args.retain_lemmas
+        args.timeout_ms,
+        args.start,
+        args.stop,
+        args.refinements,
+        args.abstract,
+        args.continue_after_failure,
+        args.retain_lemmas,
+        (lambda row: print(json.dumps(row), file=sys.stderr, flush=True)) if args.progress else None,
     )
     print(json.dumps(report, indent=2))
     if not all(row["proved"] for row in report["stages"]):

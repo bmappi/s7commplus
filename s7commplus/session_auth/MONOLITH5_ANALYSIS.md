@@ -145,7 +145,8 @@ This uses 2H=p+1, so H*sum(h)-p*majority(h) becomes
 H*parity(h)+majority(h). It is an exact reformulation of the symbolic model,
 not interpolation. It still does not recover the two streams separately.
 
-For Monolith4, the resulting full-addition **candidate** is:
+For Monolith4, the resulting decoded full-addition identity is now proved
+by the carry-stage source proof below:
 
 ```text
 T = B0+B1+(h0 & h1)
@@ -155,11 +156,21 @@ overflow = T >= 2^168
 V(out)-V(in0)-V(in1) = -12032*overflow (mod p)
 ```
 
-The last equation follows algebraically from the candidate: the boundary
+The last equation follows algebraically from the decoded addition: the boundary
 contributes -p*(h0 & h1), which vanishes modulo p, while a discarded carry
 contributes -2^168, congruent to -12032. All 1,000 seeded arbitrary raw-span
-tests match the complete candidate and both overflow branches. Thus it explains
-the previous negative control, but sampling does not prove all 168 output bits.
+tests match the complete formula and both overflow branches. Sampling alone
+did not prove all 168 output bits; the later source proof completes that step.
+The exact signed decoder also obeys the integer identity:
+
+```text
+D(out) = D(in0)+D(in1)-n-p*(h0 & h1)-2^168*overflow
+```
+
+This retains both corrections before modular reduction. Independent weighted
+decoder tests cover all eight boundary-bit/overflow combinations. The tool's
+historical `candidate_add` name is retained, but its decoded predictions are
+now established for the pinned source, not merely sampled.
 
 The tool separately proves h_out and the first **eight** B_out bits for every
 uint32 source using canonical ROBDD equality against ripple-addition diagrams.
@@ -178,10 +189,10 @@ source assignments as lemmas. Reports include source/model SHA-256 hashes,
 solver version, completed query count, and timeout/unknown or counterexample
 status. An unknown result exits unsuccessfully; it is never treated as proof.
 
-With Z3 4.16.0 and a 60-second solver budget, the full attempt established the
+The initial Z3 4.16.0 run with a 60-second solver budget established the
 boundary bit and first 25 payload bits, then returned unknown/timeout on the
-next query. This extends the bounded source proof, but **does not establish the
-remaining 143 payload bits**. The runtime is unchanged.
+next query. That attempt was only a bounded source proof; the carry-stage
+decomposition below subsequently proves all 168 bits. The runtime is unchanged.
 
 ```bash
 python -m tools.recover_monolith4_span_identity
@@ -190,9 +201,9 @@ python -m tools.prove_monolith4_span_identity --payload-bits 25
 python -m tools.prove_monolith4_span_identity --timeout-ms 60000
 ```
 
-Remaining work: prove the full Monolith4 candidate, derive corresponding
-Monolith3/6 equations, and establish encoding bounds through the whole setup.
-A bounded prefix proof alone does not justify a runtime rewrite.
+Remaining work: derive corresponding Monolith3/6 equations and establish
+encoding bounds through the whole setup. A decoded identity alone does not
+justify replacing encoded runtime words.
 
 ## Carry-stage proof decomposition
 
@@ -214,12 +225,27 @@ complete. Eight deterministic controls compare both the independent fixed-width
 AST compiler and the demanded-bit compiler against generated output before any
 solver queries. Reports pin source/model hashes and solver version.
 
-With Z3 4.16.0, the dedicated stages [0,31) all returned UNSAT, establishing
+Initially, dedicated stages [0,31) with Z3 4.16.0 all returned UNSAT, establishing
 the boundary and a **30-bit payload prefix**. An isolated UNSAT proof of
 carry_29_to_30 then extends the established prefix to **31 bits by composition**.
 The isolated report correctly claims no prefix on its own: it does not include
-the base cases. The remaining 137 payload bits are unproved. Time budgets and
-proof frontiers can vary; an unknown does not refute the source identity.
+the base cases. That was a partial result, superseded by the complete run below.
+
+The full source run now returns **UNSAT for all 169 obligations**, proving the
+boundary identity and all **168 payload bits** for arbitrary uint32 inputs.
+It uses fresh Z3 SAT-tactic solvers over the unsimplified demanded-bit DAG,
+without cut signals, retained lemmas, or reachable-state assumptions. Preserving
+the source DAG and selecting the direct SAT tactic made previously stalled
+queries tractable. The run used a 30-second budget per stage; total stage time
+was about 530 seconds and the slowest stage about 7.05 seconds. Compilation and
+the eight generated-code controls are outside the per-stage solver budget.
+
+`tools/monolith4_carry_proof.json` records the full run, hashes, Z3 version,
+timings, and every completed obligation. It is a solver-run record, **not an
+independently checkable proof certificate**. Default tests check its provenance
+and accounting, not the UNSAT answers themselves; rerun the optional harness to
+replay the proof. Time budgets and proof frontiers can vary, and an unknown is
+still neither a proof nor a refutation.
 
 The experimental cone mode replaces nonlocal sub-DAGs with consistently shared,
 independent Boolean cut signals. Every concrete source assignment specializes
@@ -234,18 +260,22 @@ slower in the tested run, so independent stage queries remain the default.
 Dependency-free tests exhaustively check cone specialization and refinement on
 small shared Boolean DAGs, including an original UNSAT expression whose
 generalization is SAT. They also guard constant preservation, induction gaps,
-partial-range completion, and invalid query limits. CLI failures and timeouts
+partial-range completion, invalid query limits, source DAG preservation,
+observer isolation, and explicit timeout reasons. CLI failures and timeouts
 exit unsuccessfully, and a full proof requires every one of the 169 stages.
 
 ```bash
 python -m tools.prove_monolith4_carry_stages --stop 31 --timeout-ms 10000
 python -m tools.prove_monolith4_carry_stages --start 31 --stop 32 --timeout-ms 30000
+python -m tools.prove_monolith4_carry_stages --timeout-ms 30000 --progress
 python -m tools.prove_monolith4_carry_stages --abstract --stop 6
 ```
 
-The next proof bottleneck is the transition into bit 31 and the later encoded
-carry boundaries. Neither these bounded proofs nor cone experiments authorize
-a runtime substitution. Runtime source and dependencies remain unchanged.
+The next source-proof targets are Monolith3/6 and the complete setup composition,
+including overflow and carry-sensitive packing. The completed Monolith4 proof
+establishes only its decoded payload and boundary, not individual encoded output
+words or the safety of a whole-pipeline modular rewrite. Runtime source and
+dependencies remain unchanged.
 
 ## Dependency neighborhoods
 
