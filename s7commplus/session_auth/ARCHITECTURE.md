@@ -206,6 +206,11 @@ and constants or algebraic cancellation may remove actual influence. Treat
 these results as navigation aids, not cryptographic proofs or replacement tests
 for byte-exact vectors.
 
+For Monolith11, a separate exhaustive bitwise analysis recovers a compact,
+exact two-kernel form for all five output words. See
+[`MONOLITH11_ANALYSIS.md`](MONOLITH11_ANALYSIS.md) for the formula, proof
+boundary, and reproduction commands. The generated runtime code is unchanged.
+
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
 `RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
