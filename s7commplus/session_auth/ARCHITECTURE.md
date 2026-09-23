@@ -123,8 +123,10 @@ session_auth/
 The `_generated/` modules are transpiled from HarpoS7's C# via
 `tools/transpile_harpo_monolith.py`. Each `monolithN.execute(dst, src)` is a
 straight-line uint32 arithmetic function verified byte-for-byte against upstream
-test vectors. They implement a proprietary permutation cipher and cannot be
-meaningfully simplified — the algorithm is designed to resist analysis.
+test vectors. These proprietary transforms are intentionally opaque, so any
+simplification needs evidence and equivalence checks. Monolith11 is a concrete
+exception: exhaustive bitwise analysis recovers a compact form below without
+changing the generated implementation.
 
 ## Artifact provenance and verification
 
@@ -185,6 +187,31 @@ may not influence every output. The mapper rejects dynamic word indexes rather
 than silently presenting an incomplete map. Use it to select a smaller target
 for tracing and differential tests; do not edit the verified generated code just
 to make it look simpler.
+
+To narrow the map to a single 32-bit destination word, run:
+
+```bash
+python tools/trace_session_auth_output.py 3 0
+python tools/trace_session_auth_output.py 3 0 --steps
+python tools/trace_session_auth_output.py 9 0 --json
+```
+
+The first argument is the monolith number (1–11), and the second is the
+zero-based output word. The default output summarizes possible input words and
+contributing assignment counts. `--steps` prints file/line locations and
+direct dependencies for each contributing assignment; `--json` returns the
+complete machine-readable backward slice. Monolith9 and Monolith10 follow
+their ordered Part files and shared scratch array. The trace versions repeated
+assignments so overwritten values do not appear as false dependencies. It is
+conservative *word-level* data flow: a listed input may not affect every bit,
+and constants or algebraic cancellation may remove actual influence. Treat
+these results as navigation aids, not cryptographic proofs or replacement tests
+for byte-exact vectors.
+
+For Monolith11, a separate exhaustive bitwise analysis recovers a compact,
+exact two-kernel form for all five output words. See
+[`MONOLITH11_ANALYSIS.md`](MONOLITH11_ANALYSIS.md) for the formula, proof
+boundary, and reproduction commands. The generated runtime code is unchanged.
 
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
 but it needs a separate authentication implementation. The Family-0
