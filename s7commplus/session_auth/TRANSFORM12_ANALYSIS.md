@@ -128,6 +128,55 @@ prove equivalence for every possible operand or identify the cryptographic
 construction. A field-level simplification needs additional range/invariant
 proofs or must preserve these compatibility corrections.
 
+## Compact mathematical shadow
+
+`tools/recover_transform12_formulas.py` symbolically interprets the fixed tail
+in the polynomial ring `(Z/pZ)[x,y]`, where `x = in5`, `y = in87`, and
+`p = 2^160 - 47`. It expands and cancels coefficients exactly, without reducing
+exponents, assuming primality, or fitting formulas to sampled values. At most
+75 nonzero terms occur in any intermediate polynomial; the four final
+polynomials contain only nine terms in total.
+
+Let `Kj` denote the decoded integer in constant row `j`, reduced modulo `p`.
+The recovered formulas are:
+
+```text
+e = (p - 1)/2 - 40
+z = x^e
+t = x^(p - 2)
+out71 = y
+out61 = z*y
+out97 = x^79*(z + y)
+out27 = K483 + K482*t*y + K481*out97 + K480*out61
+```
+
+All equations in this section use arithmetic modulo `p`. The exponent `p-2`
+is inverse-like, and `(p-1)/2` suggests a character-like power, but those
+interpretations require additional primality and nonzero-input arguments.
+The formulas alone do not establish a curve-coordinate interpretation.
+
+**These are not byte-equivalent runtime replacements.** Even the small entry
+inputs `x=y=1` cause divergence. The first loss of modular congruence is at
+SSA value 429, tape word 34725: subtraction receives `2` and `p+3`. Exact
+arithmetic returns `2^160-1`, whose residue is 46, rather than the modular
+result `p-1`. The final slots 27, 61, and 97 then differ from the shadow;
+slot 71 agrees for this witness. Both entry inputs being below `p` is therefore
+insufficient to justify a modular rewrite. This does not establish that the
+witness occurs in a real authentication session.
+
+```bash
+python -m tools.recover_transform12_formulas
+python -m tools.recover_transform12_formulas --compare 1 1
+```
+
+The first command regenerates exact sparse polynomial coefficients. The second
+locates the first divergence between independent compatibility arithmetic and
+the modular shadow. Tests verify the complete coefficient identities, compare
+compact formulas with both polynomial evaluation and a modular tape interpreter
+on boundary/random inputs, and preserve the packed-runtime mismatch witness.
+The next task is recovering input/intermediate invariants or retaining exact
+corrections alongside the short mathematical structure.
+
 ## Verification
 
 Tests compare all 498 decoded programs byte-for-byte with the tape interpreter,
