@@ -222,7 +222,8 @@ and reproduction command. The generated runtime code is unchanged.
 The same per-bit symbolic approach also recovers exact, analysis-only models
 for Monolith7 output words 3–5 and 15–17. See
 [`MONOLITH7_ANALYSIS.md`](MONOLITH7_ANALYSIS.md) for the deliberately partial
-scope and verification command. The other Monolith7 outputs are not replaced
+scope, the shared conditional-selection/majority cores for words 3–5, and
+verification commands. The other Monolith7 outputs are not replaced
 or claimed to be simplified.
 
 Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,

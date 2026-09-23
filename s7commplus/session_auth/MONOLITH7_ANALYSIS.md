@@ -34,13 +34,62 @@ assignment = selected source-bit values packed in selector order
 destination[word].bit[bit] = XOR_{term in ANF_f} AND_{i in term} assignment.bit[i]
 ```
 
-The 68 shared ANFs and 96 source-bit selectors are saved in
+The 68 shared functions and 96 source-bit selectors are saved in
 `tools/monolith7_middle_model.json`; the independent evaluator is
-`tools/monolith7_middle_model.py`. An empty term denotes the constant one.
-The JSON model is about 18 KB versus about 102 KB for the entire generated
+`tools/monolith7_middle_model.py`. A term mask of zero denotes the constant one.
+The factored JSON model is about 13.4 KB versus about 102 KB for the entire generated
 Monolith7 Python file. This is a compact *partial* mathematical description,
 not an identification of the algorithm's original cryptographic design.
 No model here covers the other 30 output words.
+
+## Shared conditional-selection and majority structure
+
+The 68 functions for words 3–5 further decompose into eight shared cores:
+
+```text
+choose(a,b,c)          = b XOR ((a XOR b) AND c)
+majority(a,b,c)        = (a AND b) XOR (a AND c) XOR (b AND c)
+xor2(a,b)             = a XOR b
+xor3(a,b,c)           = a XOR b XOR c
+mux_xor(a,b,c,d)      = choose(a,b,c) XOR d
+gated_choose(a,b,c,d) = a AND choose(b,c,d)
+gated_majority(a,b,c,d) = a AND majority(b,c,d)
+majority_xor(a,b,c,d) = a XOR majority(b,c,d)
+```
+
+`choose` selects `a` when `c` is one and `b` otherwise. `majority` is one
+when at least two inputs are one. Input permutations and inversions account
+for variants of these cores. Every saved function needs at most five core
+calls followed by an ANF with at most four terms. The 2,324 monomials in the
+previous shared ANFs become 190 outer terms plus 25 terms in the eight shared
+cores; the model also records 211 core calls across the 68 functions.
+
+For example, output word 3 bit 8 originally has 55 ANF monomials. Its recovered
+formula is (`s[w].bit[b]` denotes one source bit):
+
+```text
+r = mux_xor(s[6].bit[0], s[7].bit[0], s[8].bit[0], s[0].bit[2])
+m = s[1].bit[14] AND majority(NOT s[10].bit[8], s[9].bit[8], s[11].bit[8])
+t = m XOR mux_xor(NOT s[9].bit[9], s[11].bit[9], s[10].bit[9], s[1].bit[15])
+destination[3].bit[8] = NOT (r OR t)
+```
+
+Inspect the source-bit selectors and named formula for any recovered bit:
+
+```bash
+python -m tools.recover_monolith7_middle --formula 3 8
+```
+
+The reusable `tools/decompose_boolean_polynomial.py` groups each ANF by
+monomials in the inputs outside a candidate subset. If the nonconstant part
+of every subset coefficient is the same function `Q`, the ANF is exactly
+`A XOR Q*B`. Replacing that subset with `Q` removes inputs from the outer
+function. Repeating the process discovers the shared cores; exhaustive small
+truth tables recognize each core under input permutation and inversion.
+Every factored function is expanded back into its unique original ANF during
+recovery, so the structural interpretation is checked algebraically.
+
+## Further per-bit analysis
 
 `tools/analyze_symbolic_monolith.py` can inspect any supported single-file
 generated output bit. It follows the versioned backward slice, uses the
@@ -72,8 +121,10 @@ python -m tools.recover_monolith7_middle --verify tools/monolith7_middle_model.j
 
 The test suite compares every saved truth table or ANF and selector with the
 symbolic derivation, checks the upstream known-answer vectors, and differentially
-compares seeded random inputs against the generated implementation. It
-also checks selected bits outside the recovered groups, so the generic
-analyzer is not tested only on its easiest target. Equivalence is to the
+compares seeded random inputs against the generated implementation. The
+decomposition tests use exhaustive truth tables for
+small functions, including a composed conditional-selection/majority formula.
+The generic analyzer is also checked on selected bits outside the recovered
+groups. Equivalence is to the
 pinned generated Python within the supported uint32 expression and sound
 backward-slice model; it is not a statement about every Siemens DLL or PLC.

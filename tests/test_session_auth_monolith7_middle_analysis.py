@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from s7commplus.session_auth.family0._generated import monolith7
+from tools.decompose_boolean_polynomial import CORE_FORMULAS
 from tools.monolith7_middle_model import execute_words
 from tools.recover_monolith7_middle import recover_model
 
@@ -23,6 +24,10 @@ def test_middle_model_is_exactly_regenerated_from_generated_source() -> None:
     assert len(saved["functions"]) == 68
     assert len(saved["bits"]) == 96
     assert max(function["inputs"] for function in saved["functions"]) == 14
+    assert len(saved["kernels"]) == 8
+    assert all((kernel["inputs"], frozenset(kernel["terms"])) in CORE_FORMULAS for kernel in saved["kernels"])
+    assert max(len(function["steps"]) for function in saved["functions"]) == 5
+    assert max(len(function["terms"]) for function in saved["functions"]) == 4
 
 
 def test_middle_model_matches_upstream_known_answer() -> None:
