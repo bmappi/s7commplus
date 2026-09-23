@@ -132,6 +132,9 @@ meaningfully simplified — the algorithm is designed to resist analysis.
 generated Python module and binary runtime table. It pins HarpoS7 v1.1.0 to
 commit `b4ba7fab14bcca4274e69a4d6524a5a61fcd329d` and records each artifact's
 classification, upstream source, generation method, byte size, and SHA-256.
+The `fp_data2.bin` table includes the one-element `Data2Collection[1]` repair
+from HarpoS7 commit `22b9dc0da3bf4b32f872b0b9ee2c2d30964e7654`; the
+manifest records this upstream patch explicitly.
 The original MIT license is in `LICENSE-HarpoS7`.
 
 Run the complete deterministic check from the repository root:
@@ -141,11 +144,52 @@ python tools/verify_session_auth_artifacts.py
 ```
 
 The command fails on a missing, changed, or newly unmanifested artifact and is
-also run by pre-commit CI. The monolith source can be regenerated one file at a
-time with `tools/transpile_harpo_monolith.py`. The constant and binary extraction
-tooling used for the initial port is not yet vendored, so their pinned sizes and
-hashes are the authoritative reproducibility check; do not claim regeneration
-for those files until that tooling is added.
+also run by pre-commit CI. To independently derive and compare the four binary
+tables and inlined constant values from a local checkout of the pinned HarpoS7
+source, run:
+
+```bash
+python tools/verify_session_auth_upstream.py --upstream-root /path/to/HarpoS7
+```
+
+The upstream checkout must be at the base revision above and contain the
+`fp_data2.bin` patch commit. The command is offline and does not modify runtime
+files. Add `--output-dir /path/to/new-directory` to regenerate the four binary
+tables into a new directory for inspection. It validates the constant *values*,
+while the manifest validates the exact formatting and bytes of `_constants.py`.
+To verify every checked-in transpiled monolith against the same pinned checkout,
+run:
+
+```bash
+python tools/verify_transpiled_monoliths.py --upstream-root /path/to/HarpoS7
+```
+
+The transpiler emits unformatted Python and includes the local source path in
+its docstring. This check compares Python syntax trees, so it verifies program
+equivalence after ignoring formatting and the checkout path. The manifest check
+above separately verifies the exact bytes of each checked-in output. The
+Monolith9 and Monolith10 wrappers are human-maintained orchestration and are
+covered by their existing vector tests.
+
+For a read-only map of which 32-bit source, destination, and scratch words each
+generated function accesses, run:
+
+```bash
+python tools/map_session_auth_monoliths.py
+python tools/map_session_auth_monoliths.py --path s7commplus/session_auth/family0/_generated/monolith1.py
+```
+
+The JSON output links each generated file to its C# source path. This is a
+*syntactic* access map, not a dependency proof: an input listed for a function
+may not influence every output. The mapper rejects dynamic word indexes rather
+than silently presenting an incomplete map. Use it to select a smaller target
+for tracing and differential tests; do not edit the verified generated code just
+to make it look simpler.
+
+Family 03 (PLCSIM) is also listed in the public-key store and blob metadata,
+but it needs a separate authentication implementation. The Family-0
+`RealPlcAuthenticator` supports only families 00 and 01; family 03 cannot be
+enabled by changing its family check or blob length.
 
 ### Review boundary
 
