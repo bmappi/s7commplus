@@ -37,6 +37,15 @@ bundled keys from that family on fresh sessions and caches the confirmed key
 for the PLC. Set `allow_legacy_key_fallback=False` on `connect()` when key
 probing must be disabled.
 
+## Field notes from an independent capture set
+
+`ANSWERS.md` answers the open questions that were marked in the code (the
+EXPLORE flag byte, the notification header UInt16s, the ObjectQualifier tail
+bytes, and others) with byte level evidence from an independent TIA Portal +
+PLCSIM S7-1500 FW 2.9 capture set. The golden frames live in
+`tests/fixtures/golden_tia_online_session_20260915.py` and can be used to
+unit test parsers against traffic TIA Portal really sent.
+
 ## Development
 
 Cloning the repository is only necessary for developing or testing
