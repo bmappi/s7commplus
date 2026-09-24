@@ -708,6 +708,96 @@ Next: recover the two packed streams or derive legal-input final carry
 predicates for slots 46/48/70, preserving the reachable slot-46 witness. Then
 an input-only exact setup model can replace the last measured corrections in
 the checkout analysis, before considering any separately validated rewrite.
+The individual carry-save recovery below now closes this setup-model gap.
+
+## Individual carry-save outputs and the input-only exact setup
+
+The decoded pair identity hides a simpler construction: the **individual**
+outputs are carry-save arithmetic, not merely two unknown parts of a sum.
+Given three decoded spans (Bi,hi), define ordinary nonnegative integers:
+
+    q = h0 XOR h1 XOR h2
+    a = majority(h0,h1,h2)
+    U = B0 XOR B1 XOR B2
+    V = H*q
+    W = (majority(B0,B1,B2) << 1) OR a
+    S = U XOR V XOR W
+    C = majority(U,V,W)
+
+Here majority on integers is bitwise `(x&y)|(x&z)|(y&z)`. The familiar
+carry-save equality S+2*C=U+V+W gives exactly the previously recovered
+target sum(Bi)+H*q+a. On the proved reachable setup domain:
+
+    Monolith6: (B_out0,h_out0) = (S>>1,S&1)
+               (B_out1,h_out1) = (C,0)
+    Monolith3: same operation with virtual input (N>>1,N&1)
+    Monolith5: packed stream A = S mod 2^168
+                            B = (C<<1) mod 2^168
+
+The complete two-stream Monolith5 formula is valid for **arbitrary raw uint32
+inputs** after normalization. For Monolith3/6, both boundary bits, all 167
+lower bits of the first span, and all 168 bits of the second span are also
+unconditional source identities. The first span's bit 167 requires the upper
+encoding/range invariant established above. Without that condition, the
+bundled-span high-bit witness still defeats an input-decoded-only formula.
+The individual decoded equations do not reconstruct the randomized raw
+encoded words, which can still have otherwise irrelevant input dependencies.
+
+`tools/prove_monolith_carry_save.py` checks **1,012 independent generated-source
+bit obligations**, all UNSAT: 338 each for Monolith3/6 and 336 for Monolith5.
+Only two obligations are conditional; no query assumes another query's answer.
+Both independently controlled source compilers are checked against eight
+arbitrary generated executions per kernel. The report pins kernels, decoder
+models, upper truth tables, and solver version. It remains a solver-run record,
+not an independently checked proof certificate.
+
+`tools/transform7_setup_integer.py` now evaluates the setup from X/Y/R using
+only these readable XOR/AND/shift equations, decoded Monolith4 addition, and
+the exact source-derived preparation/merge equations. It recovers **both
+packed streams**, so their 160-bit fold and final lost-carry predicates are
+input-only computations too. It needs no measured output, interpolated affine
+offset, generated-kernel call, or runtime arithmetic helper. All 23 wrapper
+steps are retained for inspection, including dead calls 7/8, and it returns
+the exact representatives of slots 46/48/70/94, not just their field residues.
+
+`tools/prove_transform7_setup_integer.py` checks every recipe call against the
+actual strict source SetupDAG with distinct provenance tokens rather than
+numeric probes. Encoded input origins, input constants, all symbolic plain
+expressions (including OR 4 and 4*X), call order, merge order, and the exact
+packed pair consumed by each merge must agree. It requires the complete
+individual-bit and legal-setup invariant records plus decoded-addition proof,
+and pins model/merge/shared-source hashes. This closes the compositional
+argument for the input-only setup model, while retaining the exceptional
+representative-sensitive merge behavior.
+
+As independent experimental verification, 1,003 synthetic setups compared
+all pre-call decoded inputs, all 23 decoded outputs or packed stream pairs,
+and all four exact final context representatives: **23,069 wrapper steps and
+4,012 slot outputs matched**. This includes zero/maximal inputs and the legal
+base-point carry witness, where slot 46 is correctly 94 rather than 2^128.
+Source-derived proof and synthetic testing are distinct evidence; neither is
+new hardware validation or proof of a modular rewrite of the scalar phases.
+
+```bash
+python -m tools.prove_monolith_carry_save --progress --summary
+python -m tools.prove_transform7_setup_integer
+python -m tools.transform7_setup_integer --carry-witness
+python -m tools.benchmark_transform7_setup
+```
+
+The correctness-gated setup-only benchmark uses the same 60-byte input and
+80-byte exact representative output interface on both sides. In the documented
+macOS arm64/Python 3.13.14 run (seven samples, ten iterations, eight cases, two
+warmups), native setup capture had median 7,158.51 us with MAD 81.55 us; the
+input-only model had median 33.02 us with MAD 0.33 us: approximately **217x**
+for this scope. Native capture includes dispatcher-patching/observation
+overhead. This is not a whole-Transform7 or authentication speedup, and no
+runtime performance change has shipped.
+
+The previously missing exact setup model is complete. The library/generated
+runtime is unchanged. Further work can connect it to the already exact scalar
+recurrence and fixed tail, or pursue reachable arithmetic invariants inside
+those phases before any mass rewrite.
 
 ## Dependency neighborhoods
 
