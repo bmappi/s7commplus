@@ -602,7 +602,9 @@ caps. It is a solver-run/proof-accounting record, not an independently checked
 certificate. The saved attempt has 16 UNSAT source queries, five integer
 deductions, two query timeouts (calls 10 and 14), and six dependency-skipped
 obligations. It proves zero wrap/truncation corrections for 15 of the 23 calls:
-0..9, 11..13, 21, and 22. The whole-setup range proof is still incomplete.
+0..9, 11..13, 21, and 22. This original expanded-DAG attempt is incomplete;
+the compositional invariant proof below supersedes its two timeouts without
+changing or relabeling the historical results.
 However, all
 wrapper corrections contributing to context slot 46's **premerge residue**
 vanish for the modeled legal input domain, closing that part of the original
@@ -634,10 +636,78 @@ python -m tools.prove_transform7_setup_ranges --timeout-ms 30000 --progress
 The command exits nonzero while any obligation is unknown or dependency-skipped.
 Slot 94's exact identity does not establish equivalence for the remaining three
 merged context slots, the scalar dispatches, or the final encoded authentication
-output. Next: close the remaining Monolith6 reachability queries and their
-downstream dependencies, then recover the individual packed streams or legal
-input carry predicates needed to remove all runtime wrapper calls. No runtime
-or generated implementation has been replaced.
+output. The compositional proof below closes the remaining Monolith6 queries
+and their downstream dependencies using a stronger upper encoding invariant.
+Individual packed streams or legal input carry predicates are still needed
+before removing runtime wrappers. No runtime or generated implementation has
+been replaced.
+
+## Hidden upper encoding: closing the setup proof compositionally
+
+The raw bits above the normalized 168-bit payload are not arbitrary padding.
+In each encoded span's last triple of words, physical bits 9..31 obey another
+23 three-input truth tables. Define a triple code as A+2*B+4*C. Each table
+admits four of its eight codes; these are the definition of its upper encoded
+zero state, not a claim that the raw words themselves are zero. The first two
+conditions can be written readably as:
+
+    physical bit 9:  NOT (B if A else C) = 0
+    physical bit 10:      B if C else A  = 0
+
+The first condition explains the bundled-span one-bit counterexample above.
+It suffices for local no-wrap, but does not preserve itself: its output depends
+on the next physical bit's encoding. Continuing this argument recovers the
+remaining tables, including choose and majority gates with inversions. Both
+bundled input spans satisfy all 23 upper-zero conditions exactly.
+
+`tools/prove_monolith_setup_invariant.py` proves the resulting invariant
+directly from each generated kernel. Inputs are otherwise arbitrary uint32
+words, with normalized payload bits 166/167 zero and all 23 upper conditions;
+Monolith3 additionally has plain bits 162..191 zero. Its **73 independent
+source obligations all return UNSAT**:
+
+- Monolith3/4/6 each preserve all 23 upper conditions and produce zero at
+  normalized payload bit 167, for all their encoded output spans.
+- Monolith5 produces both packed streams below 2^167.
+
+These are conditional kernel theorems, not sampled pattern assertions. Each
+query uses the complete generated-source DAG, no cut signals, and no other
+query's answer. The checked-in truth tables are an explicit readable Boolean
+invariant; their discovery alone is not the proof. The saved record pins all
+four kernels and both decoder/model files and is not a proof certificate.
+
+The compositional setup proof checks the exact source initializer, rotation,
+call graph, aliases, and merge operands using the earlier SetupDAG. Concrete
+input spans must satisfy the upper conditions. A later span inherits them
+only from an entire output span whose preceding call has already been proved.
+Independent integer bounds establish B<2^166 at every call; the local theorem
+then proves its output top bits, and the complete decoded carry theorems
+establish zero wrap. Integer pair-sum caps are retained jointly, rather than
+double-counting both members. The exact Monolith5 congruence lifts to an
+integer sum because both streams and their bounded target are below 2^168.
+No global expansion of earlier output gates or sampled range lemma is needed.
+
+The original partial expanded-DAG report remains unchanged. All 23 setup
+wrappers have zero correction in the new induction, so the previously
+recovered affine **premerge residue** formulas for slots 46/48/70/94 hold
+throughout the legal input domain. `tools/transform7_setup_invariant_proof.json`
+records the distinct compositional deductions as `derived`, not invented
+UNSAT answers, and pins the local and decoded-kernel records it relies on.
+Eight actual synthetic setups independently replay raw high-bit snapshots
+before the full induction. The final merged outputs still have the previously
+derived representative-sensitive carry correction; proving zero wrapper
+corrections must not remove that correction or imply whole authentication
+equivalence. Slot 94 retains the stronger exact representative identity X.
+
+```bash
+python -m tools.prove_monolith_setup_invariant --progress
+python -m tools.prove_transform7_setup_ranges --compositional --progress
+```
+
+Next: recover the two packed streams or derive legal-input final carry
+predicates for slots 46/48/70, preserving the reachable slot-46 witness. Then
+an input-only exact setup model can replace the last measured corrections in
+the checkout analysis, before considering any separately validated rewrite.
 
 ## Dependency neighborhoods
 

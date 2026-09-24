@@ -25,6 +25,7 @@ from collections.abc import Callable
 
 from s7commplus.session_auth.family0 import big_int_operations, transform7, transform12
 from tools.prove_monolith4_span_identity import symbolic_source
+from tools.prove_monolith_setup_invariant import UPPER_ZERO_TRIPLES
 from tools.recover_transform7_setup import capture_setup
 from tools.recover_monolith4_span_identity import _gate, normalized_span, normalized_terms, output_bit_diagram
 from tools.recover_monolith5_span_decoder import MODULUS, P
@@ -409,6 +410,146 @@ def slot94_identity(dag: SetupDAG, zero_wraps: set[int]) -> bool:
     return True
 
 
+def setup_invariant_dependency() -> dict[str, Any]:
+    """Require every local preservation obligation, with exact source pins."""
+    folder = Path(__file__).parent
+    path = folder / "monolith_setup_invariant_proof.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    stages = {"payload_bit_167_zero", *(f"upper_bit_{k}_zero" for k in range(168, 191))}
+    expected = {(number, stage) for number in (3, 4, 6) for stage in stages}
+    expected.add((5, "packed_streams_below_2_167"))
+    rows = report["stages"]
+    if (
+        not report["full_proof"]
+        or len(rows) != 73
+        or {(row["monolith"], row["stage"]) for row in rows} != expected
+        or not all(row["proved"] and row["result"] == "unsat" for row in rows)
+        or report["upper_zero_triples"] != [list(values) for values in UPPER_ZERO_TRIPLES]
+    ):
+        raise ValueError("complete pinned local setup invariant proof is required")
+    source = Path(transform7.__file__).parent / "_generated"
+    expected_sources = {f"monolith{number}.py" for number in (3, 4, 5, 6)}
+    expected_models = {"monolith5_model.json", "monolith5_gate_model.json"}
+    if set(report["source_sha256"]) != expected_sources or set(report["gate_model_sha256"]) != expected_models:
+        raise ValueError("incomplete local invariant provenance")
+    for pins, directory in ((report["source_sha256"], source), (report["gate_model_sha256"], folder)):
+        if any(hashlib.sha256((directory / name).read_bytes()).hexdigest() != digest for name, digest in pins.items()):
+            raise ValueError("local invariant source or decoder changed")
+    return {
+        "file": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "scope": "all 73 local source obligations; solver-run record, not a certificate",
+    }
+
+
+def require_upper_zero(bits: tuple[Bit, ...], origin: tuple[int, int] | None, established: set[int]) -> None:
+    """Validate constants directly, or inherit only from a proved output span."""
+    if origin is not None:
+        if origin[0] not in established:
+            raise ValueError("input upper encoding invariant has not been established")
+        if span_bound(bits, {origin[0]: 0})[1] != origin:
+            raise ValueError("upper encoding provenance does not match the entire output span")
+        return
+    if len(bits) != 576 or not all(type(bit) is int and bit in (0, 1) for bit in bits):
+        raise ValueError("upper encoding input is not a concrete complete span")
+    for bit, allowed in enumerate(UPPER_ZERO_TRIPLES, 9):
+        code = sum(bits[(15 + member) * 32 + bit] << member for member in range(3))
+        if code not in allowed:
+            raise ValueError("concrete span violates the upper encoding invariant")
+
+
+def prove_compositional(progress: bool = False, *, translation_controls: int = 8) -> dict[str, Any]:
+    """Induct through actual setup using local theorems, not sampled bounds."""
+    dependency = setup_invariant_dependency()
+    dependencies = {number: kernel_dependency(number) for number in (3, 4, 6)}
+    verify_translation(translation_controls, progress)
+    dag = SetupDAG()
+    maxima: dict[int, int] = {}
+    pair_maxima: dict[int, int] = {}
+    upper_zero: set[int] = set()
+    zero_wraps: set[int] = set()
+    rows = []
+    for name, _ in dag.queries():
+        index = int(name.split("_")[1])
+        number, _, inputs = dag.calls[index]
+        row: dict[str, Any] = {"stage": name, "result": "derived", "proved": True}
+        if "plain" in name:
+            if any(type(bit) is not int or bit != 0 for bit in inputs[2][162:]):
+                raise ValueError("plain input does not have its structural 162-bit bound")
+            row["method"] = "exact setup initialization/rotation: all plain bits 162..191 are zero"
+        else:
+            encoded = inputs[:2] if number == 3 else inputs
+            for bits in encoded:
+                maximum, origin = span_bound(bits, maxima)
+                if maximum >= 1 << 166:
+                    raise ValueError("local theorem requires input B<2^166")
+                require_upper_zero(bits, origin, upper_zero)
+            combined = combined_maximum(encoded, maxima, pair_maxima)
+            if number == 4:
+                maximum = combined + 1
+                row["method"] = "complete decoded addition theorem plus local upper-zero preservation"
+            else:
+                target = combined + (P + 1) // 2 + 1
+                if number == 3:
+                    plain = inputs[2]
+                    if any(isinstance(bit, OutputBit) for bit in plain):
+                        raise ValueError("unexpected encoded output in plain setup input")
+                    plain_maximum = sum(1 << k for k, bit in enumerate(plain) if type(bit) is not int or bit != 0)
+                    if plain_maximum >= 1 << 162:
+                        raise ValueError("plain range does not establish zero truncation/top carry")
+                    target += plain_maximum >> 1
+                if number in (3, 6):
+                    # Inputs B<2^166 imply r167=0. The local theorem gives
+                    # both output top bits zero, hence m=top_count-r167=0.
+                    maximum = target // 2
+                    pair_maxima[index] = maximum
+                    row["method"] = "local top-bit/upper-zero theorem plus complete doubled-pair carry identity"
+                else:
+                    # Local theorem bounds each packed stream below 2^167.
+                    # Their sum and target are <2^168, lifting the exact
+                    # combined-payload congruence to an integer equality.
+                    if target >= MODULUS:
+                        raise ValueError("packed target may wrap")
+                    maximum = target
+                    row["method"] = "local packed-stream top-bit theorem plus exact Monolith5 combined congruence"
+            if maximum >= 1 << 166:
+                raise ValueError("derived bound does not close setup induction")
+            maxima[index] = maximum
+            zero_wraps.add(index)
+            if number != 5:
+                upper_zero.add(index)
+            row.update(maximum_payload=maximum, zero_wrap_derived=True, upper_zero_inherited=number != 5)
+        rows.append(row)
+        if progress:
+            print(json.dumps(row), file=sys.stderr, flush=True)
+    paths = [
+        Path(transform7.__file__),
+        Path(big_int_operations.__file__),
+        Path(transform7.__file__).with_name("monolith_wrappers.py"),
+    ]
+    paths.extend(Path(transform7.__file__).parent / "_generated" / f"monolith{number}.py" for number in (3, 4, 5, 6))
+    completed = [
+        slot
+        for slot, expression in compose(corrected=True).items()
+        if all(int(name[1:]) in zero_wraps for name, _ in expression.terms if name.startswith("c"))
+    ]
+    return {
+        "scope": "all legal unsigned-160-bit setup inputs: zero wrapper corrections and affine PREMERGE residues; NOT final merge or whole-runtime equivalence",
+        "source_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths},
+        "data_sha256": hashlib.sha256(transform7.TRANSFORM7_DATA).hexdigest(),
+        "z3_version": dag.z3.get_version_string(),
+        "translation_controls": translation_controls,
+        "expected_stages": 29,
+        "full_proof": len(rows) == 29 and zero_wraps == set(range(23)),
+        "kernel_dependencies": dependencies,
+        "local_invariant_dependency": dependency,
+        "zero_wrap_calls": sorted(zero_wraps),
+        "completed_premerge_slots": sorted(completed),
+        "slot94_exact_input_identity_proved": slot94_identity(dag, zero_wraps),
+        "stages": rows,
+    }
+
+
 def prove(timeout_ms: int = 10000, progress: bool = False, *, stop_on_failure: bool = False) -> dict[str, Any]:
     if timeout_ms <= 0:
         raise ValueError("expected positive solver timeout")
@@ -539,8 +680,17 @@ def main() -> None:
     parser.add_argument("--timeout-ms", type=int, default=10000)
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--stop-on-failure", action="store_true")
+    parser.add_argument(
+        "--compositional",
+        action="store_true",
+        help="use the complete local encoding invariant instead of expanding preceding calls",
+    )
     args = parser.parse_args()
-    report = prove(args.timeout_ms, args.progress, stop_on_failure=args.stop_on_failure)
+    report = (
+        prove_compositional(args.progress)
+        if args.compositional
+        else prove(args.timeout_ms, args.progress, stop_on_failure=args.stop_on_failure)
+    )
     print(json.dumps(report, indent=2))
     if not report["full_proof"]:
         raise SystemExit(1)
