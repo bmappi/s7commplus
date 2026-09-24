@@ -43,6 +43,7 @@ s7commplus = [
     "py.typed",
     "session_auth/**/*.bin",
     "session_auth/ARCHITECTURE.md",
+    "session_auth/MAINTAINER_GUIDE.md",
     "session_auth/MONOLITH5_ANALYSIS.md",
     "session_auth/MONOLITH7_ANALYSIS.md",
     "session_auth/MONOLITH11_ANALYSIS.md",
